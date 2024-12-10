@@ -5,7 +5,7 @@ use crate::{
         building_blocks::Choose, Action, Automation, Condition, Service, Stop, TimeInterval,
         TraceOptions, Trigger, TriggerHolder,
     },
-    config::{ClimateConfig, Room, DEFAULT_ACCEPTABLE_TEMPERATURE_DIFFERENCE},
+    config::{ClimateConfig, Room},
     entity_id::{EntityId, EntityMember, EntityMemberType, EntityType, HasEntityType as _},
     helpers::{
         DerivativeSensor,
@@ -233,6 +233,27 @@ impl TryFrom<&ClimateConfig> for Package {
             output.helpers.insert(entity.clone(), input);
             EntityMember::state(entity)
         };
+        let acceptable_temperature_difference_step = {
+            let name = "Radiator temperature precision";
+            let entity = output.new_entity_id(InputNumber::entity_type(), &name);
+            let input = InputNumber {
+                name: Some(name.into()),
+                unit_of_measurement: UnitOfMeasurement::Celcius,
+                min: ComparableNumber::Float(0.25),
+                max: 2.into(),
+                step: ComparableNumber::Float(0.25),
+                icon: Some("mdi:tape-measure".into()),
+                mode: InputNumberMode::Box,
+            };
+            output.customize(entity.clone(), Customize::Initial, 0.75);
+            output.customize(
+                entity.clone(),
+                Customize::DeviceClass,
+                DeviceClass::Temperature,
+            );
+            output.helpers.insert(entity.clone(), input);
+            EntityMember::state(entity)
+        };
         for (room_name, room) in config.rooms.iter() {
             let never_triggered = Condition::Template {
                 value_template: TemplateExpression::this_automation_last_trigger()
@@ -367,11 +388,11 @@ impl TryFrom<&ClimateConfig> for Package {
                             .to_ha_call()
                             .to_float();
                     &*(&*chosen_temperature - predicted_temperature_entity).abs()
-                        / TemplateExpression::literal(
-                            room.acceptable_temperature_difference
-                                .or(config.acceptable_temperature_difference)
-                                .unwrap_or(DEFAULT_ACCEPTABLE_TEMPERATURE_DIFFERENCE),
-                        )
+                        / room
+                            .acceptable_temperature_difference
+                            .or(config.acceptable_temperature_difference)
+                            .map(TemplateExpression::literal)
+                            .unwrap_or(acceptable_temperature_difference_step.to_ha_call().to_float())
                 }
                 .to_int();
                 if room.valve_closing_automation {
@@ -536,7 +557,7 @@ impl TryFrom<&ClimateConfig> for Package {
                     let template_closing_percent = closing_percent.to_ha_call().to_int();
                     let template_closing_step = closing_step.to_ha_call().to_int();
                     let mut adjust_steps =
-                        &*comfortable_temperature_multiplier * template_closing_step.clone();
+                        (&*comfortable_temperature_multiplier * template_closing_step.clone()).mark_const_expr();
                     if let Some(friction) = room.full_close_friction.or(config.full_close_friction)
                     {
                         let friction = TemplateExpression::literal(friction);

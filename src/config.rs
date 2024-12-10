@@ -10,8 +10,6 @@ pub struct RadiatorConfig {
     pub entity_id: EntityId,
 }
 
-pub const DEFAULT_ACCEPTABLE_TEMPERATURE_DIFFERENCE: f32 = 0.75;
-
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Room {

@@ -176,25 +176,25 @@ impl<T: std::fmt::Debug, F: Fn(&TemplateBlock) -> Option<T>> Iterator for Recurs
     type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
+        let mut returned = None;
         if let Some(item) = self.known.pop_front() {
             if let Some(ret) = (self.return_filter)(&item) {
-                return Some(ret);
-            } else {
-                match item {
-                    TemplateBlock::Text(_) => todo!(),
-                    TemplateBlock::Expr(item) => {
-                        for item in item.iter() {
-                            self.known.push_back(item);
-                        }
+                returned = Some(ret);
+            }
+            match item {
+                TemplateBlock::Text(_) => todo!(),
+                TemplateBlock::Expr(item) => {
+                    for item in item.iter() {
+                        self.known.push_back(item);
                     }
-                    TemplateBlock::Control(item) => {
-                        for item in item.iter() {
-                            self.known.push_back(item);
-                        }
+                }
+                TemplateBlock::Control(item) => {
+                    for item in item.iter() {
+                        self.known.push_back(item);
                     }
                 }
             }
-            self.next()
+            returned.or_else(|| self.next())
         } else {
             None
         }
@@ -260,7 +260,7 @@ impl std::fmt::Display for Template {
             Cached,
         }
         let mut status = HashMap::new();
-        let mut prefix = vec![];
+        let mut prefix_reversed = vec![];
         let iterator = RecursiveIter {
             known: self.content.iter().cloned().collect(),
             return_filter: |x| {
@@ -281,7 +281,7 @@ impl std::fmt::Display for Template {
                     .and_modify(|status| {
                         if matches!(status, CacheStatus::Candidate) {
                             let var_name = TemplateState::new_var_in(&mut f.state.variables);
-                            prefix.push(TemplateBlock::Control(
+                            prefix_reversed.push(TemplateBlock::Control(
                                 TemplateControl::Assign(var_name.clone(), expr.clone()).into(),
                             ));
                             const_entry.insert(TemplateExpression::Literal(var_name).into());
@@ -293,7 +293,13 @@ impl std::fmt::Display for Template {
             }
         }
 
-        Self::print_contents(prefix.into_iter().chain(self.content.iter().cloned()), f)
+        Self::print_contents(
+            prefix_reversed
+                .into_iter()
+                .rev()
+                .chain(self.content.iter().cloned()),
+            f,
+        )
     }
 }
 
@@ -600,7 +606,7 @@ impl TemplateExpression {
         Self::Unary(op, self).into()
     }
     pub fn gt(self: Rc<Self>, rhs: impl Into<Rc<TemplateExpression>>) -> Rc<TemplateExpression> {
-        self.op(TemplateOp::Rem, rhs.into())
+        self.op(TemplateOp::Gt, rhs.into())
     }
     pub fn ge(self: Rc<Self>, rhs: impl Into<Rc<TemplateExpression>>) -> Rc<TemplateExpression> {
         self.op(TemplateOp::Ge, rhs.into())
