@@ -3,38 +3,32 @@ use serde::Serialize;
 use super::{Action, Condition};
 
 #[derive(Serialize)]
-pub struct Choose<'a> {
-    pub conditions: Vec<Condition<'a>>,
-    pub sequence: Vec<Action<'a>>,
+pub struct Choose {
+    pub conditions: Vec<Condition>,
+    pub sequence: Vec<Action>,
 }
-
 
 #[derive(Serialize)]
 #[serde(tag = "condition", content = "conditions")]
-pub enum ConditionalActions<'a> {
+pub enum ConditionalActions {
     #[allow(unused)]
     If {
-        #[serde(borrow)]
-        r#if: Condition<'a>,
-        r#then: Box<Action<'a>>,
+        r#if: Condition,
+        r#then: Box<Action>,
     },
     #[allow(unused)]
     #[serde(untagged)]
-    Choose {
-        choose: Vec<Choose<'a>>,
-    },
+    Choose { choose: Vec<Choose> },
 }
 
-impl<'a> From<ConditionalActions<'a>> for Action<'a> {
-    fn from(value: ConditionalActions<'a>) -> Self {
+impl From<ConditionalActions> for Action {
+    fn from(value: ConditionalActions) -> Self {
         Action::Conditional(value)
     }
 }
 
-impl<'a> From<Vec<Choose<'a>>> for Action<'a> {
-    fn from(value: Vec<Choose<'a>>) -> Self {
-        ConditionalActions::Choose {
-            choose: value
-        }.into()
+impl From<Vec<Choose>> for Action {
+    fn from(value: Vec<Choose>) -> Self {
+        ConditionalActions::Choose { choose: value }.into()
     }
 }

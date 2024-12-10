@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashSet};
+use std::{collections::HashSet, ops::Deref as _, rc::Rc};
 
 use crate::{
     automation::{
@@ -17,7 +17,7 @@ use crate::{
         UnitTime,
     },
     package::Customize,
-    template::{IntoJinja, JinjaTemplate, TemplateExpression},
+    template::{Template, TemplateExpression},
     types::ComparableNumber,
     Package,
 };
@@ -30,34 +30,57 @@ pub enum TranslationError {
 }
 
 fn temperature_in_1_hour(
-    temperature: EntityMember<'_>,
-    derivate: EntityMember<'_>,
-    trend: EntityMember<'_>,
-) -> JinjaTemplate<'static> {
-    JinjaTemplate(
-        format!(
-            "
-        {{%- set trend = {trend} %}}
-        {{%- set calc = namespace(temperature = {temperature}, derivate = {derivate}) %}}
-        {{%- for iteration in range(0, {iterations}) %}}
-        {{%- set calc.temperature = calc.temperature + calc.derivate / {iterations} %}}
-        {{%- set calc.derivate = calc.derivate + trend / {iterations} %}}
-        {{%- endfor %}}
-        {{{{ calc.temperature | round(2) }}}}",
-            temperature = temperature.to_ha_call().to_float().as_raw_template(),
-            derivate = derivate.to_ha_call().to_float().as_raw_template(),
-            trend = trend.to_ha_call().to_float().as_raw_template(),
-            iterations = 12
-        )
-        .into(),
-    )
+    temperature: EntityMember,
+    derivate: EntityMember,
+    trend: EntityMember,
+) -> Template {
+    let mut template = Template::default();
+    let trend = template.assign_new(trend.to_ha_call().to_float());
+    let namespace = template.assign_new_namespace([
+        ("t", temperature.to_ha_call().to_float()),
+        ("d", derivate.to_ha_call().to_float()),
+    ]);
+    let temperature_name = namespace.member("t");
+    let temperature = temperature_name.deref().clone();
+    let derivate_name = namespace.member("d");
+    let derivate = derivate_name.deref().clone();
+    let iterations = TemplateExpression::literal(12);
+    template.for_each(
+        TemplateExpression::range(TemplateExpression::literal(0), iterations.clone()),
+        |template, _var| {
+            template.assign(
+                &temperature_name,
+                &*temperature + (&*derivate / iterations.clone()),
+            );
+            template.assign(&derivate_name, &*derivate + (&**trend / iterations))
+        },
+    );
+    template.expr(temperature.round(2));
+    template
+    //JinjaTemplate(
+    //    format!(
+    //        "
+    //    {{%- set trend = {trend} %}}
+    //    {{%- set calc = namespace(temperature = {temperature}, derivate = {derivate}) %}}
+    //    {{%- for iteration in range(0, {iterations}) %}}
+    //    {{%- set calc.temperature = calc.temperature + calc.derivate / {iterations} %}}
+    //    {{%- set calc.derivate = calc.derivate + trend / {iterations} %}}
+    //    {{%- endfor %}}
+    //    {{{{ calc.temperature | round(2) }}}}",
+    //        temperature = temperature.to_ha_call().to_float().as_raw_template(),
+    //        derivate = derivate.to_ha_call().to_float().as_raw_template(),
+    //        trend = trend.to_ha_call().to_float().as_raw_template(),
+    //        iterations = 12
+    //    )
+    //    .into(),
+    //)
 }
 
-fn template_sensor(name: String, template: impl IntoJinja) -> TemplateSensor {
+fn template_sensor(name: String, template: impl Into<Template>) -> TemplateSensor {
     TemplateSensor {
         name,
         device_class: Some(Temperature),
-        state: template.to_jinja().to_string(),
+        state: template.into(),
         state_class: Some(Measurement),
         unit_of_measurement: Some(Celcius),
         unique_id: None,
@@ -66,22 +89,22 @@ fn template_sensor(name: String, template: impl IntoJinja) -> TemplateSensor {
 }
 
 struct RoomTemperatureSensors {
-    chosen_temperature: EntityMember<'static>,
-    current_temperature_average: EntityMember<'static>,
+    chosen_temperature: EntityMember,
+    current_temperature_average: EntityMember,
 }
 
-impl<'a: 'b, 'b> Package<'b> {
+impl Package {
     fn build(
         &mut self,
         room_name: &str,
-        room: &Room<'_>,
+        room: &Room,
         temperature_offset: &EntityMember,
     ) -> RoomTemperatureSensors {
         let mut room_current_temperature_entities = Vec::with_capacity(room.radiators.len() + 1);
         let mut room_chosen_temperature_entities = Vec::with_capacity(room.radiators.len() + 1);
         let externals = if let Some(external_sensor) = &room.temperature_sensor {
             let external_temperature =
-                EntityMember(external_sensor.borrow(), EntityMemberType::State);
+                EntityMember(external_sensor.clone(), EntityMemberType::State);
             room_current_temperature_entities.push(external_temperature.clone());
             let name = format!("{room_name} external temperature weight",);
             let entity = self.new_entity_id(InputNumber::entity_type(), &name);
@@ -91,7 +114,7 @@ impl<'a: 'b, 'b> Package<'b> {
                 min: 0.into(),
                 max: 1000.into(),
                 step: 5.into(),
-                icon: Some(Cow::Borrowed("mdi:scale-unbalanced")),
+                icon: Some("mdi:scale-unbalanced".into()),
                 mode: Default::default(),
             };
             self.customize(entity.clone(), Customize::Initial, 100);
@@ -107,11 +130,11 @@ impl<'a: 'b, 'b> Package<'b> {
         };
         for radiator in &room.radiators[..] {
             room_current_temperature_entities.push(EntityMember(
-                radiator.entity_id.clone().into_static(),
+                radiator.entity_id.clone(),
                 "current_temperature".into(),
             ));
             room_chosen_temperature_entities.push(EntityMember(
-                radiator.entity_id.clone().into_static(),
+                radiator.entity_id.clone(),
                 "temperature".into(),
             ));
         }
@@ -126,41 +149,40 @@ impl<'a: 'b, 'b> Package<'b> {
             );
             entity
         };
-        let mut divider = TemplateExpression::constant(room.radiators.len());
-        let mut temperature_sum = TemplateExpression::fold(
-            room.radiators.iter().map(|x| {
-                EntityMember(
-                    x.entity_id.clone().into_static(),
-                    "current_temperature".into(),
-                )
-                .to_ha_call()
-                .to_float()
-            }),
-            |x, y| &x + &y,
+        let mut divider = TemplateExpression::literal(room.radiators.len());
+        let mut temperature_sum = TemplateExpression::sum(
+            room.radiators
+                .iter()
+                .map(|x| {
+                    EntityMember(x.entity_id.clone(), "current_temperature".into())
+                        .to_ha_call()
+                        .to_float()
+                })
+                .collect::<Vec<_>>(),
         )
         .unwrap();
         if let Some((external_temperature, external_weight)) = externals {
-            let weight = &external_weight.to_ha_call().to_float() / 100;
-            divider = &divider + &weight;
+            let weight =
+                &*external_weight.to_ha_call().to_float() / TemplateExpression::literal(100);
+            divider = &*divider + weight.clone();
             temperature_sum =
-                &temperature_sum + &(&external_temperature.to_ha_call().to_float() * &weight);
+                &*temperature_sum + (&*external_temperature.to_ha_call().to_float() * weight);
         }
         let mut current_temperature_average_sensor =
-            template_sensor(entity_id.id.to_string(), &temperature_sum / &divider);
+            template_sensor(entity_id.id.to_string(), &*temperature_sum / divider);
         current_temperature_average_sensor
             .set_availability_from(&room_current_temperature_entities[..]);
         let current_temperature_average = EntityMember::state(entity_id);
         self.helpers.insert((), current_temperature_average_sensor);
-
         let chosen_temperature = {
-            let temperature_template: TemplateExpression =
-                &match &room_chosen_temperature_entities[..] {
+            let temperature_template: Rc<TemplateExpression> =
+                &*match &room_chosen_temperature_entities[..] {
                     [single_radiator] => single_radiator.to_ha_call().to_float(),
                     ref multiple => {
                         TemplateExpression::max(multiple.iter().map(|x| x.to_ha_call().to_float()))
                             .expect("There are at least one radiator")
                     }
-                } + &temperature_offset.to_ha_call().to_float();
+                } + temperature_offset.to_ha_call().to_float();
             let template_name = format!("{} target temperature", room_name);
             let entity_id = self.new_entity_id(TemplateSensor::entity_type(), &template_name);
             self.customize(entity_id.clone(), Customize::FriendlyName, template_name);
@@ -183,12 +205,12 @@ impl<'a: 'b, 'b> Package<'b> {
     }
 }
 
-impl<'a, 'b: 'a, 'c: 'b> TryFrom<&'b ClimateConfig<'c>> for Package<'a> {
+impl TryFrom<&ClimateConfig> for Package {
     type Error = TranslationError;
 
-    fn try_from(config: &'b ClimateConfig<'c>) -> Result<Self, Self::Error> {
+    fn try_from(config: &ClimateConfig) -> Result<Self, Self::Error> {
         let mut output = Self::default();
-        output.entity_id_prefix = Cow::Borrowed(config.entity_id_prefix.as_ref());
+        output.entity_id_prefix = config.entity_id_prefix.clone();
         let mut iteration: u8 = 0;
         let radiator_temperature_offset = {
             let name = "Temperature offset for radiators";
@@ -199,7 +221,7 @@ impl<'a, 'b: 'a, 'c: 'b> TryFrom<&'b ClimateConfig<'c>> for Package<'a> {
                 min: 0.into(),
                 max: 10.into(),
                 step: ComparableNumber::Float(0.5),
-                icon: Some(Cow::Borrowed("mdi:thermometer-plus")),
+                icon: Some("mdi:thermometer-plus".into()),
                 mode: InputNumberMode::Box,
             };
             output.customize(entity.clone(), Customize::Initial, 0.5);
@@ -213,20 +235,24 @@ impl<'a, 'b: 'a, 'c: 'b> TryFrom<&'b ClimateConfig<'c>> for Package<'a> {
         };
         for (room_name, room) in config.rooms.iter() {
             let never_triggered = Condition::Template {
-                value_template: Cow::Borrowed("{{ this.attributes.last_triggered is none }}"),
+                value_template: TemplateExpression::this_automation_last_trigger()
+                    .is_none()
+                    .into(),
             };
             let RoomTemperatureSensors {
                 chosen_temperature,
                 current_temperature_average: temperature_entity,
             } = output.build(room_name, room, &radiator_temperature_offset);
-            let derivate_entity = EntityMember::state(output.new_entity_id(
-                DerivativeSensor::entity_type(),
-                &format!("{room_name} temperature change"),
-            ));
-            let temperature_entity = temperature_entity.into_static();
+            let derivate_entity = {
+                let name = format!("{room_name} temperature change");
+                let entity = output.new_entity_id(DerivativeSensor::entity_type(), &name);
+                output.customize(entity.clone(), Customize::FriendlyName, name);
+                EntityMember::state(entity)
+            };
+            let temperature_entity = temperature_entity;
             let derivate_sensor = DerivativeSensor {
                 name: derivate_entity.entity_id().id.to_string(),
-                source: temperature_entity.entity_id().into_static(),
+                source: temperature_entity.entity_id(),
                 time_window: room
                     .derivative_spanning
                     .as_ref()
@@ -235,10 +261,12 @@ impl<'a, 'b: 'a, 'c: 'b> TryFrom<&'b ClimateConfig<'c>> for Package<'a> {
                 unit_time: Some(UnitTime::Hours),
                 round: Some(2),
             };
-            let trend_entity = EntityMember::state(output.new_entity_id(
-                DerivativeSensor::entity_type(),
-                &format!("{room_name} temperature trend"),
-            ));
+            let trend_entity = {
+                let name = format!("{room_name} temperature trend");
+                let entity = output.new_entity_id(DerivativeSensor::entity_type(), &name);
+                output.customize(entity.clone(), Customize::FriendlyName, name);
+                EntityMember::state(entity)
+            };
             let trend_sensor = DerivativeSensor {
                 name: trend_entity.entity_id().id.to_string(),
                 source: derivate_entity.clone().static_entity_id(),
@@ -280,8 +308,8 @@ impl<'a, 'b: 'a, 'c: 'b> TryFrom<&'b ClimateConfig<'c>> for Package<'a> {
             output.helpers.insert((), derivate_sensor);
             output.helpers.insert((), trend_sensor);
             for radiator in &room.radiators {
-                let mut extra_run_conditions: Option<Condition<'static>> = None;
-                let mut add_run_condition = |condition: Condition<'static>| {
+                let mut extra_run_conditions: Option<Condition> = None;
+                let mut add_run_condition = |condition: Condition| {
                     if let Some(conditions) = &mut extra_run_conditions {
                         extra_run_conditions = Some(conditions.clone().or(condition.clone()));
                     } else {
@@ -290,28 +318,23 @@ impl<'a, 'b: 'a, 'c: 'b> TryFrom<&'b ClimateConfig<'c>> for Package<'a> {
                     condition
                 };
                 let mut used_entities = HashSet::new();
-                let mut add_automation_entity: Box<
-                    dyn for<'x> FnMut(EntityMember<'x>) -> EntityMember<'x>,
-                > = Box::new(|entity| {
-                    HashSet::insert(&mut used_entities, entity.clone().into_static());
-                    entity
-                });
+                let mut add_automation_entity: Box<dyn FnMut(EntityMember) -> EntityMember> =
+                    Box::new(|entity| {
+                        HashSet::insert(&mut used_entities, entity.clone());
+                        entity
+                    });
                 iteration = iteration.overflowing_add(7).0;
                 let radiator_action = add_automation_entity(EntityMember(
-                    radiator.entity_id.clone().into_static(),
+                    radiator.entity_id.clone(),
                     "hvac_action".into(),
                 ));
                 let closing_percent = EntityMember::state(EntityId::external(
                     EntityType::Number,
-                    format!(
-                        "{}_valve_closing_degree",
-                        radiator.entity_id.clone().into_static().id
-                    )
-                    .into(),
+                    &format!("{}_valve_closing_degree", radiator.entity_id.id),
                 ));
                 let closing_step = EntityMember(closing_percent.static_entity_id(), "step".into());
                 let is_not_heating = Condition::State {
-                    entity_id: radiator.entity_id.clone().into_static().into(),
+                    entity_id: radiator.entity_id.clone().into(),
                     attribute: Some("hvac_action".into()),
                     state: Some("idle".into()),
                     r#for: None,
@@ -325,7 +348,7 @@ impl<'a, 'b: 'a, 'c: 'b> TryFrom<&'b ClimateConfig<'c>> for Package<'a> {
                 let mut actions = vec![Choose {
                     conditions: vec![never_triggered.clone()],
                     sequence: vec![Action::Stop(Stop {
-                        stop: Cow::Borrowed("We don't have any information on first execution"),
+                        stop: "We don't have any information on first execution".into(),
                         enabled: true,
                     })],
                 }];
@@ -335,7 +358,7 @@ impl<'a, 'b: 'a, 'c: 'b> TryFrom<&'b ClimateConfig<'c>> for Package<'a> {
                         .state_entity()
                         .expect("Current temperature must be a state"),
                 );
-                let predicted_comfortable_temeprature = {
+                let comfortable_temperature_multiplier = {
                     let chosen_temperature = add_automation_entity(chosen_temperature.clone())
                         .to_ha_call()
                         .to_float();
@@ -343,17 +366,14 @@ impl<'a, 'b: 'a, 'c: 'b> TryFrom<&'b ClimateConfig<'c>> for Package<'a> {
                         add_automation_entity(predicted_temperature_entity.clone())
                             .to_ha_call()
                             .to_float();
-                    Condition::Template {
-                        value_template: (&chosen_temperature - &predicted_temperature_entity)
-                            .abs()
-                            .lt(&TemplateExpression::constant(
-                                room.acceptable_temperature_difference
-                                    .or(config.acceptable_temperature_difference)
-                                    .unwrap_or(DEFAULT_ACCEPTABLE_TEMPERATURE_DIFFERENCE),
-                            ))
-                            .to_jinja(),
-                    }
-                };
+                    &*(&*chosen_temperature - predicted_temperature_entity).abs()
+                        / TemplateExpression::literal(
+                            room.acceptable_temperature_difference
+                                .or(config.acceptable_temperature_difference)
+                                .unwrap_or(DEFAULT_ACCEPTABLE_TEMPERATURE_DIFFERENCE),
+                        )
+                }
+                .to_int();
                 if room.valve_closing_automation {
                     let min_closing_valve_entity = {
                         let name = format!(
@@ -367,7 +387,7 @@ impl<'a, 'b: 'a, 'c: 'b> TryFrom<&'b ClimateConfig<'c>> for Package<'a> {
                             min: 0.into(),
                             max: 100.into(),
                             step: 1.into(),
-                            icon: Some(Cow::Borrowed("mdi:valve")),
+                            icon: Some("mdi:valve".into()),
                             mode: Default::default(),
                         };
                         output.customize(
@@ -395,7 +415,7 @@ impl<'a, 'b: 'a, 'c: 'b> TryFrom<&'b ClimateConfig<'c>> for Package<'a> {
                             min: 0.into(),
                             max: 100.into(),
                             step: 1.into(),
-                            icon: Some(Cow::Borrowed("mdi:valve-closed")),
+                            icon: Some("mdi:valve-closed".into()),
                             mode: Default::default(),
                         };
                         output.customize(
@@ -423,7 +443,7 @@ impl<'a, 'b: 'a, 'c: 'b> TryFrom<&'b ClimateConfig<'c>> for Package<'a> {
                             min: 0.into(),
                             max: 120.into(),
                             step: ComparableNumber::Float(0.25),
-                            icon: Some(Cow::Borrowed("mdi:timer")),
+                            icon: Some("mdi:timer".into()),
                             mode: InputNumberMode::Box,
                         };
                         output.customize(
@@ -438,18 +458,20 @@ impl<'a, 'b: 'a, 'c: 'b> TryFrom<&'b ClimateConfig<'c>> for Package<'a> {
                         );
                         output.helpers.insert(entity.clone(), input);
                         let time = EntityMember::state(entity).to_ha_call().to_float();
-                        let hours = (&time / 60).to_int();
-                        let minutes = (&time % 60).to_int();
-                        let seconds = (&(&time * 60) % 60).to_int();
-                        (&TemplateExpression::now()
-                            - &TemplateExpression::this_automation_last_trigger())
-                            .gt(&TemplateExpression::timedelta(hours, minutes, seconds))
-                            .to_condition()
+                        let sixty = TemplateExpression::literal(60);
+                        let hours = (&*time / sixty.clone()).to_int();
+                        let minutes = (&*time % sixty.clone()).to_int();
+                        let seconds = (&*(&*time * sixty.clone()) % sixty).to_int();
+                        Condition::from_template(
+                            (&*TemplateExpression::now()
+                                - TemplateExpression::this_automation_last_trigger())
+                            .gt(TemplateExpression::timedelta(hours, minutes, seconds)),
+                        )
                     };
 
                     let invalid_closing_values_automation = {
-                        let max_changed: Cow<_> = "max_changed".into();
-                        let min_changed: Cow<_> = "min_changed".into();
+                        let max_changed: Rc<str> = "max_changed".into();
+                        let min_changed: Rc<str> = "min_changed".into();
                         Automation {
                             name: output.new_automation_identifier(&format!(
                                 "Fix illegal values for closing valve settings for {}",
@@ -480,7 +502,9 @@ impl<'a, 'b: 'a, 'c: 'b> TryFrom<&'b ClimateConfig<'c>> for Package<'a> {
                                         enabled: true,
                                     }],
                                     sequence: vec![Service::SetInputNumberValue {
-                                        data: max_closing_valve_entity.to_ha_call().to_int().into(),
+                                        data: Service::template_data(
+                                            max_closing_valve_entity.to_ha_call().to_int(),
+                                        ),
                                         target: min_closing_valve_entity
                                             .state_entity()
                                             .unwrap()
@@ -494,7 +518,9 @@ impl<'a, 'b: 'a, 'c: 'b> TryFrom<&'b ClimateConfig<'c>> for Package<'a> {
                                         enabled: true,
                                     }],
                                     sequence: vec![Service::SetInputNumberValue {
-                                        data: min_closing_valve_entity.to_ha_call().to_int().into(),
+                                        data: Service::template_data(
+                                            min_closing_valve_entity.to_ha_call().to_int(),
+                                        ),
                                         target: max_closing_valve_entity
                                             .state_entity()
                                             .unwrap()
@@ -509,42 +535,58 @@ impl<'a, 'b: 'a, 'c: 'b> TryFrom<&'b ClimateConfig<'c>> for Package<'a> {
                     output.automation.push(invalid_closing_values_automation);
                     let template_closing_percent = closing_percent.to_ha_call().to_int();
                     let template_closing_step = closing_step.to_ha_call().to_int();
-                    let may_close = (&template_closing_percent + &template_closing_step)
-                        .le(&max_closing_valve_entity.to_ha_call().to_int())
-                        .to_condition();
-                    let may_open = (&template_closing_percent - &template_closing_step)
-                        .ge(&min_closing_valve_entity.to_ha_call().to_int())
-                        .to_condition();
+                    let mut adjust_steps =
+                        &*comfortable_temperature_multiplier * template_closing_step.clone();
+                    if let Some(friction) = room.full_close_friction.or(config.full_close_friction)
+                    {
+                        let friction = TemplateExpression::literal(friction);
+                        adjust_steps = TemplateExpression::if_then_else(
+                            (&*template_closing_percent + adjust_steps.clone())
+                                .le(&*max_closing_valve_entity.to_ha_call().to_int()
+                                    - friction.clone()),
+                            adjust_steps.clone(),
+                            &*adjust_steps - friction,
+                        );
+                    }
+                    let may_close = Condition::from_template(
+                        (&*template_closing_percent + template_closing_step.clone())
+                            .le(max_closing_valve_entity.to_ha_call().to_int()),
+                    );
+                    let may_open = Condition::from_template(
+                        (&*template_closing_percent - template_closing_step)
+                            .ge(min_closing_valve_entity.to_ha_call().to_int()),
+                    );
+                    let should_change = Condition::from_template(
+                        adjust_steps.clone().gt(TemplateExpression::literal(0)),
+                    );
                     actions.append(&mut vec![
                         Choose {
-                            conditions: vec![Condition::comment("No longer affected by the heat cycle, so check if we should turn the passive heat down.").and(
+                            conditions: vec![Condition::comment("No longer affected by the heat cycle, so check if we should turn the passive heat down."),
                                              add_run_condition(
                                 may_close
                                     .and(after_heat_backoff)
-                                    .and(predicted_comfortable_temeprature.clone().not())
-                                    .and(predicted_above_requested.clone())),
+                                    .and(should_change.clone())
+                                    .and(predicted_above_requested.clone()),
                             )],
                             sequence: vec![Service::SetNumberValue {
-                                data: (&template_closing_percent + &template_closing_step).into(),
-                                target: closing_percent.entity_id().into_static().into(),
+                                data: Service::template_data(TemplateExpression::min([&*template_closing_percent + adjust_steps.clone(), max_closing_valve_entity.to_ha_call().to_int()].into_iter()).unwrap()),
+                                target: closing_percent.entity_id().into(),
                             }
                             .into()],
                         },
                         Choose {
-                            conditions: vec![Condition::comment("It's too cold, try to turn the heat up.").and(
+                            conditions: vec![Condition::comment("It's too cold, try to turn the heat up."),
                                              add_run_condition(
                                 may_open
                                     .and(is_not_heating.clone())
-                                    .and(predicted_comfortable_temeprature.not())
-                                    .and(predicted_above_requested.not().clone())),
+                                    .and(should_change)
+                                    .and(predicted_above_requested.not().clone()),
                             )],
                             sequence: vec![Service::SetNumberValue {
                                 data: {
-                                    let closing_percent = closing_percent.to_ha_call().to_int();
-                                    let closing_step = closing_step.to_ha_call().to_int();
-                                    (&closing_percent - &closing_step).into()
+                                    Service::template_data(TemplateExpression::max([&*template_closing_percent - adjust_steps, min_closing_valve_entity.to_ha_call().to_int()].into_iter()).unwrap())
                                 },
-                                target: closing_percent.entity_id().into_static().into(),
+                                target: closing_percent.entity_id().into(),
                             }
                             .into()],
                         },
@@ -553,9 +595,9 @@ impl<'a, 'b: 'a, 'c: 'b> TryFrom<&'b ClimateConfig<'c>> for Package<'a> {
                     let mut conditions = vec![];
                     if let Some(availability_checks) = TemplateExpression::fold(
                         used_entities.into_iter().map(|x| x.to_ha_check()),
-                        |x, y| x.and(&y),
+                        |x, y| x.and(y),
                     ) {
-                        conditions.push((&availability_checks).into());
+                        conditions.push(Condition::from_template(availability_checks));
                     }
                     conditions.push(never_triggered.clone().or(
                         if let Some(extra_conditions) = extra_run_conditions {
@@ -567,12 +609,12 @@ impl<'a, 'b: 'a, 'c: 'b> TryFrom<&'b ClimateConfig<'c>> for Package<'a> {
                     let automation = Automation {
                         name: output.new_automation_identifier(&format!(
                             "Automatic minimum valve opening for {}",
-                            radiator.entity_id
+                            radiator.entity_id.assumed_friendly_name()
                         )),
                         trace: Some(TraceOptions { stored_traces: 15 }),
                         trigger: [
                             Trigger::State {
-                                entity_id: radiator.entity_id.clone().into_static().into(),
+                                entity_id: radiator.entity_id.clone().into(),
                             },
                             Trigger::State {
                                 entity_id: temperature_entity

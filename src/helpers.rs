@@ -1,9 +1,13 @@
 use core::ops::Mul;
-use std::{borrow::Cow, collections::HashMap};
+use std::{collections::HashMap, rc::Rc};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{entity_id::{EntityId, EntityMember, EntityType, HasEntityType}, template::{IntoJinja as _, TemplateExpression}, types::{ComparableNumber, HasSensors, InsertableIn}};
+use crate::{
+    entity_id::{EntityId, EntityMember, EntityType, HasEntityType},
+    template::{Template, TemplateExpression},
+    types::{ComparableNumber, HasSensors, InsertableIn},
+};
 #[derive(Serialize)]
 #[serde(untagged)]
 pub enum MaybeList<T> {
@@ -70,9 +74,9 @@ impl Mul<usize> for &Duration {
 
 #[derive(Serialize)]
 #[serde(rename_all = "snake_case")]
-pub struct DerivativeSensor<'a> {
+pub struct DerivativeSensor {
     pub name: String,
-    pub source: EntityId<'a>,
+    pub source: EntityId,
     pub time_window: Duration,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unit_time: Option<UnitTime>,
@@ -80,13 +84,11 @@ pub struct DerivativeSensor<'a> {
     pub round: Option<usize>,
 }
 
-impl HasEntityType for DerivativeSensor<'_> {
+impl HasEntityType for DerivativeSensor {
     fn entity_type() -> EntityType {
         EntityType::Sensor
     }
 }
-
-pub type Template = String;
 
 #[derive(Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -142,7 +144,7 @@ pub struct TemplateSensor {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unique_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub availability: Option<String>,
+    pub availability: Option<Template>,
 }
 
 impl TemplateSensor {
@@ -150,7 +152,11 @@ impl TemplateSensor {
         if entities.is_empty() {
             self.availability = None
         } else {
-            self.availability = Some(TemplateExpression::fold(entities.iter().map(|x| x.to_ha_check()), |x, y| x.and(&y)).unwrap().to_jinja().into_owned())
+            self.availability = Some(
+                TemplateExpression::fold(entities.iter().map(|x| x.to_ha_check()), |x, y| x.and(y))
+                    .unwrap()
+                    .into(),
+            )
         }
     }
 }
@@ -169,16 +175,9 @@ pub struct TemplateSensorHolder {
 
 #[derive(Serialize)]
 #[serde(tag = "platform", rename_all = "snake_case")]
-pub enum Sensor<'a> {
-    Derivative(DerivativeSensor<'a>),
+pub enum Sensor {
+    Derivative(DerivativeSensor),
 }
-
-//#[derive(Serialize, Default)]
-//#[serde(rename_all = "snake_case")]
-//pub struct Derivatives<'a> {
-//    #[serde(borrow)]
-//    pub sensors: HashMap<Cow<'a, str>, DerivativeSensor<'a>>,
-//}
 
 impl HasSensors for Option<[TemplateSensorHolder; 1]> {
     fn is_empty(&self) -> bool {
@@ -197,42 +196,42 @@ pub enum InputNumberMode {
 
 #[derive(Serialize)]
 #[serde(rename_all = "snake_case")]
-pub struct InputNumber<'a> {
-    pub name: Option<Cow<'a, str>>,
+pub struct InputNumber {
+    pub name: Option<Rc<str>>,
     pub unit_of_measurement: UnitOfMeasurement,
     pub min: ComparableNumber<2, i32>,
     pub max: ComparableNumber<2, i32>,
     pub step: ComparableNumber<2, i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub icon: Option<Cow<'a, str>>,
+    pub icon: Option<Rc<str>>,
     pub mode: InputNumberMode,
 }
 
-impl HasEntityType for InputNumber<'_> {
+impl HasEntityType for InputNumber {
     fn entity_type() -> EntityType {
         EntityType::InputNumber
     }
 }
 
-impl<'data: 'helper, 'helper> InsertableIn<Helpers<'helper>> for TemplateSensor {
+impl InsertableIn<Helpers> for TemplateSensor {
     type Key = ();
-    fn insert_into(self, _name: Self::Key, target: &mut Helpers<'helper>) -> bool {
+    fn insert_into(self, _name: Self::Key, target: &mut Helpers) -> bool {
         target.template.get_or_insert_default()[0].sensor.push(self);
         true
     }
 }
 
-impl<'data: 'helper, 'helper> InsertableIn<Helpers<'helper>> for DerivativeSensor<'data> {
+impl InsertableIn<Helpers> for DerivativeSensor {
     type Key = ();
-    fn insert_into(self, _name: Self::Key, target: &mut Helpers<'helper>) -> bool {
+    fn insert_into(self, _name: Self::Key, target: &mut Helpers) -> bool {
         target.sensor.push(Sensor::Derivative(self));
         true
     }
 }
 
-impl<'data: 'helper, 'helper> InsertableIn<Helpers<'helper>> for InputNumber<'data> {
-    type Key = EntityId<'data>;
-    fn insert_into(self, name: Self::Key, target: &mut Helpers<'helper>) -> bool {
+impl InsertableIn<Helpers> for InputNumber {
+    type Key = EntityId;
+    fn insert_into(self, name: Self::Key, target: &mut Helpers) -> bool {
         debug_assert!(name.r#type == Self::entity_type());
         target.input_number.insert(name.id, self).is_none()
     }
@@ -240,21 +239,17 @@ impl<'data: 'helper, 'helper> InsertableIn<Helpers<'helper>> for InputNumber<'da
 
 #[derive(Serialize, Default)]
 #[serde(rename_all = "snake_case")]
-pub struct Helpers<'a> {
-    #[serde(skip_serializing_if = "HasSensors::is_empty", borrow)]
-    pub sensor: Vec<Sensor<'a>>,
+pub struct Helpers {
+    #[serde(skip_serializing_if = "HasSensors::is_empty")]
+    pub sensor: Vec<Sensor>,
     #[serde(skip_serializing_if = "HasSensors::is_empty")]
     pub template: Option<[TemplateSensorHolder; 1]>,
-    #[serde(skip_serializing_if = "HasSensors::is_empty", borrow)]
-    pub input_number: HashMap<Cow<'a, str>, InputNumber<'a>>,
+    #[serde(skip_serializing_if = "HasSensors::is_empty")]
+    pub input_number: HashMap<Rc<str>, InputNumber>,
 }
 
-impl<'a> Helpers<'a> {
-    pub fn insert<'data: 'a, T: InsertableIn<Self>>(
-        &mut self,
-        key: T::Key,
-        value: T,
-    ) -> bool {
+impl Helpers {
+    pub fn insert<T: InsertableIn<Self>>(&mut self, key: T::Key, value: T) -> bool {
         value.insert_into(key, self)
     }
 }

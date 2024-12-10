@@ -1,10 +1,15 @@
-use std::{borrow::Cow, marker::PhantomData};
+use std::{borrow::Cow, rc::Rc};
 
-use serde::{de::{self, Visitor}, Deserialize, Serialize};
+use serde::{
+    de::{self, Visitor},
+    Deserialize, Serialize,
+};
 
 use crate::{template::TemplateExpression, types::to_string_serialize, Package};
 
-#[derive(strum::EnumString, strum::IntoStaticStr, strum::Display, Clone, Hash, PartialEq, Eq, Copy)]
+#[derive(
+    strum::EnumString, strum::IntoStaticStr, strum::Display, Clone, Hash, PartialEq, Eq, Copy,
+)]
 pub enum EntityType {
     #[strum(serialize = "climate")]
     Climate,
@@ -19,136 +24,135 @@ pub enum EntityType {
 }
 
 #[derive(Clone, Hash, PartialEq, Eq)]
-pub struct EntityId<'a> {
+pub struct EntityId {
     pub r#type: EntityType,
-    pub id: Cow<'a, str>,
+    pub id: Rc<str>,
 }
 
-impl<'a> EntityId<'a> {
-    pub fn external(r#type: EntityType, id: Cow<'a, str>) -> Self {
+impl EntityId {
+    pub fn external(r#type: EntityType, id: &str) -> Self {
         Self {
             r#type,
-            id: EntityId::encode_string(&id),
+            id: EntityId::encode_string(id),
         }
     }
 
     pub fn assumed_friendly_name(&self) -> String {
         let mut capital = true;
-        self.id.chars().map(|x|
-            if x == '_' {
-                capital = true;
-                ' '
-            } else if capital {
-                capital = false;
-                x.to_ascii_uppercase()
-            } else {
-                x
-            }).collect()
+        self.id
+            .chars()
+            .map(|x| {
+                if x == '_' {
+                    capital = true;
+                    ' '
+                } else if capital {
+                    capital = false;
+                    x.to_ascii_uppercase()
+                } else {
+                    x
+                }
+            })
+            .collect()
     }
 }
 
-impl<'a: 'b, 'b> EntityId<'a> {
-    pub fn borrow(&'b self) -> EntityId<'b> {
-        EntityId::external(self.r#type.clone(), match &self.id {
-            Cow::Borrowed(borrowed) => Cow::Borrowed(borrowed),
-            Cow::Owned(owned) => Cow::Borrowed(&owned),
-        })
-    }
-}
-
-impl EntityId<'static> {
-    pub fn encode_string(name: &str) -> Cow<'static, str> {
+impl EntityId {
+    pub fn encode_string(name: &str) -> Rc<str> {
         let mut encoded = name.to_lowercase().replace(' ', "_").replace('.', "_");
         encoded.retain(|c| (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || (c == '_'));
         encoded.into()
     }
 }
 
-
-impl EntityId<'_> {
-    pub fn into_static(self) -> EntityId<'static> {
-        EntityId::external(self.r#type.clone(), match self.id {
-            Cow::Borrowed(borrowed) => Cow::Owned(borrowed.to_owned()),
-            Cow::Owned(owned) => Cow::Owned(owned),
-        })
-    }
-}
-
 #[derive(Clone, Hash, PartialEq, Eq)]
-pub enum EntityMemberType<'a> {
+pub enum EntityMemberType {
     State,
-    Attribute(Cow<'a, str>),
+    Attribute(Rc<str>),
 }
 
-impl<'a> From<&'a str> for EntityMemberType<'a> {
-    fn from(value: &'a str) -> Self {
-        Self::Attribute(Cow::Borrowed(value))
+impl<I: Into<Rc<str>>> From<I> for EntityMemberType {
+    fn from(value: I) -> Self {
+        Self::Attribute(value.into())
     }
 }
 
 #[derive(Clone, Hash, Eq, PartialEq)]
-pub struct EntityMember<'a>(pub EntityId<'a>, pub EntityMemberType<'a>);
+pub struct EntityMember(pub EntityId, pub EntityMemberType);
 
-impl<'a> HasEntityId for EntityMember<'a> {
-    fn entity_id(&self) -> EntityId<'a> {
+impl HasEntityId for EntityMember {
+    fn entity_id(&self) -> EntityId {
         self.0.clone()
     }
 }
 
-impl<'a> EntityMember<'a> {
-    pub fn to_ha_call(&self) -> TemplateExpression<'static> {
+impl EntityMember {
+    pub fn to_ha_call(&self) -> Rc<TemplateExpression> {
         match &self.1 {
-            EntityMemberType::State => TemplateExpression(format!("states('{}',rounded=False)", self.0).into()),
-            EntityMemberType::Attribute(cow) => TemplateExpression(format!("state_attr('{}', '{cow}')", self.0).into()),
+            EntityMemberType::State => TemplateExpression::fun(
+                "states",
+                [
+                    (None, TemplateExpression::string(self.0.to_string())),
+                    (Some("rounded"), TemplateExpression::bool(false)),
+                ],
+            )
+            .mark_const_expr(),
+            EntityMemberType::Attribute(cow) => TemplateExpression::fun(
+                "state_attr",
+                [
+                    (None, TemplateExpression::string(self.0.to_string())),
+                    (None, TemplateExpression::string(cow.clone())),
+                ],
+            )
+            .mark_const_expr(),
         }
     }
 
-    pub fn to_ha_check(&self) -> TemplateExpression<'static> {
+    pub fn to_ha_check(&self) -> Rc<TemplateExpression> {
+        let entity = TemplateExpression::string(self.0.to_string());
         match &self.1 {
-            EntityMemberType::State => TemplateExpression(format!("has_value('{}')", self.0).into()),
-            EntityMemberType::Attribute(cow) => TemplateExpression(format!("(has_value('{entity}') and state_attr('{entity}', '{cow}') is not none)", entity = self.0).into()),
+            EntityMemberType::State => {
+                TemplateExpression::fun("has_value", [(None, entity.clone())]).mark_const_expr()
+            }
+            EntityMemberType::Attribute(cow) => {
+                TemplateExpression::fun("has_value", [(None, entity.clone())])
+                    .and(
+                        TemplateExpression::fun(
+                            "state_attr",
+                            [
+                                (None, entity.clone()),
+                                (None, TemplateExpression::string(cow.clone())),
+                            ],
+                        )
+                        .is_not_none(),
+                    )
+                    .mark_const_expr()
+            }
         }
     }
 
-    pub fn state(entity: EntityId<'a>) -> Self {
+    pub fn state(entity: EntityId) -> Self {
         EntityMember(entity, EntityMemberType::State)
     }
 
-    pub fn state_entity(&self) -> Option<EntityId<'a>> {
+    pub fn state_entity(&self) -> Option<EntityId> {
         match &self.1 {
             EntityMemberType::State => Some(self.0.clone()),
             EntityMemberType::Attribute(_cow) => None,
         }
     }
 
-    pub fn static_state_entity(&self) -> Option<EntityId<'static>> {
-        match &self.1 {
-            EntityMemberType::State => Some(self.0.clone().into_static()),
-            EntityMemberType::Attribute(_cow) => None,
-        }
+    pub fn static_state_entity(&self) -> Option<EntityId> {
+        self.state_entity()
     }
 }
 
-impl EntityMember<'_> {
-    pub fn into_static(self) -> EntityMember<'static> {
-        EntityMember(self.0.into_static(), match self.1 {
-            EntityMemberType::State => EntityMemberType::State,
-            EntityMemberType::Attribute(Cow::Borrowed(borrowed)) => EntityMemberType::Attribute(Cow::Owned(borrowed.to_string())),
-            EntityMemberType::Attribute(Cow::Owned(owned)) => EntityMemberType::Attribute(Cow::Owned(owned)),
-        })
-    }
-}
-
-impl<'a: 'b, 'b> EntityMember<'a> {
+impl EntityMember {
     #[allow(unused)]
-    pub fn entity_id(&'b self) -> EntityId<'b> {
-        match &self.0 {
-            EntityId { r#type, id: Cow::Owned(value) } => EntityId::external(r#type.clone(), Cow::Borrowed(value)),
-            borrowed@EntityId { id: Cow::Borrowed(_), .. } => borrowed.clone(),
-        }
+    pub fn entity_id(&self) -> EntityId {
+        self.0.clone()
     }
     #[allow(unused)]
-    pub fn attribute(&'b self) -> Option<Cow<'b, str>> {
+    pub fn attribute(&self) -> Option<Rc<str>> {
         match &self.1 {
             EntityMemberType::State => None,
             EntityMemberType::Attribute(cow) => Some(cow.clone()),
@@ -156,11 +160,11 @@ impl<'a: 'b, 'b> EntityMember<'a> {
     }
 }
 
-impl EntityMember<'static> {
-    pub fn static_entity_id(&self) -> EntityId<'static> {
+impl EntityMember {
+    pub fn static_entity_id(&self) -> EntityId {
         self.0.clone()
     }
-    pub fn static_attribute(&self) -> Option<Cow<'static, str>> {
+    pub fn static_attribute(&self) -> Option<Rc<str>> {
         match &self.1 {
             EntityMemberType::State => None,
             EntityMemberType::Attribute(cow) => Some(cow.clone()),
@@ -169,41 +173,29 @@ impl EntityMember<'static> {
 }
 
 #[derive(Default)]
-struct EntityDeserializer<'a> {
-    phantom: PhantomData<&'a ()>,
-}
-impl<'a, 'de: 'a> Visitor<'de> for EntityDeserializer<'a> {
-    type Value = EntityId<'a>;
+struct EntityDeserializer {}
+impl<'de> Visitor<'de> for EntityDeserializer {
+    type Value = EntityId;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(formatter, "An entity id, based on a domain and a name")
     }
 
-    fn visit_borrowed_str<E>(self, v: &'de str) -> Result<Self::Value, E>
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
     where
         E: de::Error,
     {
         match v.find(|x| x == '.') {
             Some(dot_at) => match v[..dot_at].try_into() {
-                Ok(entity_type) => Ok(EntityId::external(entity_type, Cow::Borrowed(&v[dot_at+1..]))),
+                Ok(entity_type) => Ok(EntityId::external(entity_type, &v[dot_at + 1..])),
                 Err(_) => Err(de::Error::invalid_type(de::Unexpected::Str(v), &self)),
             },
             _ => Err(de::Error::invalid_type(de::Unexpected::Str(v), &self)),
         }
     }
-
-    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E> where E: de::Error, {
-        let EntityId { r#type, id } = self.visit_borrowed_str(v)?;
-        Ok(EntityId::external(r#type, Cow::Owned(id.to_string())))
-    }
-
-    fn visit_string<E>(self, v: String) -> Result<Self::Value, E> where E: de::Error, {
-        let EntityId { r#type, id } = self.visit_borrowed_str(&v)?;
-        Ok(EntityId::external(r#type, Cow::Owned(id.to_string())))
-    }
 }
 
-impl<'de: 'a, 'a> Deserialize<'de> for EntityId<'a> {
+impl<'de> Deserialize<'de> for EntityId {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -212,13 +204,13 @@ impl<'de: 'a, 'a> Deserialize<'de> for EntityId<'a> {
     }
 }
 
-impl std::fmt::Display for EntityId<'_> {
+impl std::fmt::Display for EntityId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!("{}.{}", self.r#type, self.id))
     }
 }
 
-impl Serialize for EntityId<'_> {
+impl Serialize for EntityId {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -227,7 +219,7 @@ impl Serialize for EntityId<'_> {
     }
 }
 
-impl std::fmt::Display for EntityMember<'_> {
+impl std::fmt::Display for EntityMember {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let after = match &self.1 {
             EntityMemberType::State => Cow::Borrowed("state"),
@@ -237,7 +229,7 @@ impl std::fmt::Display for EntityMember<'_> {
     }
 }
 
-impl Serialize for EntityMember<'_> {
+impl Serialize for EntityMember {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -248,7 +240,7 @@ impl Serialize for EntityMember<'_> {
 
 pub trait HasEntityId {
     #[allow(unused)]
-    fn entity_id(&self) -> EntityId<'_>;
+    fn entity_id(&self) -> EntityId;
 }
 
 pub trait HasEntityType {
@@ -261,25 +253,31 @@ impl EntityType {
     }
 }
 
-impl Package<'_> {
-    pub fn new_entity_id(&self, entity_type: EntityType, name: &str) -> EntityId<'static> {
+impl Package {
+    pub fn new_entity_id(&self, entity_type: EntityType, name: &str) -> EntityId {
         let mut counter = 0;
-        let mut known_entity_ids = self.known_entity_ids.lock().expect("We will not mess up this lock");
+        let mut known_entity_ids = self
+            .known_entity_ids
+            .lock()
+            .expect("We will not mess up this lock");
         loop {
             let ctr: Cow<str> = if counter > 0 {
                 counter.to_string().into()
             } else {
                 "".into()
             };
-            let entity_id = EntityId::external(entity_type, format!("{}_{name}{ctr}", self.entity_id_prefix).into());
-            if known_entity_ids.insert(entity_id.clone().into_static()) {
-                return entity_id
+            let entity_id = EntityId::external(
+                entity_type,
+                &format!("{}_{name}{ctr}", self.entity_id_prefix),
+            );
+            if known_entity_ids.insert(entity_id.clone()) {
+                return entity_id;
             }
             counter += 1;
         }
     }
 
-    pub fn new_identity_name_for<T: HasEntityType>(&self, name: &str) -> Cow<'static, str> {
-        self.new_entity_id(T::entity_type(), name).id
+    pub fn new_identity_name_for<T: HasEntityType>(&self, name: &str) -> Rc<str> {
+        self.new_entity_id(T::entity_type(), &name).id
     }
 }

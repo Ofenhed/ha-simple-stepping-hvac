@@ -1,6 +1,8 @@
-use core::{f32, fmt};
 use std::{
-    any::TypeId, collections::HashMap, fmt::Display, hash::{Hash, Hasher}
+    any::TypeId,
+    collections::HashMap,
+    fmt::Display,
+    hash::{Hash, Hasher},
 };
 
 use serde::Serialize;
@@ -16,13 +18,6 @@ where
 {
     serializer.serialize_str(&what.to_string())
 }
-
-pub trait Number: fmt::Display {}
-impl Number for i32 {}
-impl Number for f32 {}
-impl Number for usize {}
-impl Number for u32 {}
-impl<const N: usize, T: Number> Number for ComparableNumber<N, T> {}
 
 pub enum ComparableNumber<const PRECISION: usize, T> {
     Float(f32),
