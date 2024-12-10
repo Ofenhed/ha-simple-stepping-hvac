@@ -255,11 +255,11 @@ impl std::fmt::Display for Template {
             f,
             state: &mut state,
         };
-        enum CacheStatus {
-            Candidate,
-            Cached,
-        }
-        let mut status = HashMap::new();
+        //enum CacheStatus {
+        //    Candidate,
+        //    Cached,
+        //}
+        //let mut status = HashMap::new();
         let mut prefix_reversed = vec![];
         let iterator = RecursiveIter {
             known: self.content.iter().cloned().collect(),
@@ -276,19 +276,19 @@ impl std::fmt::Display for Template {
             let expr: Rc<TemplateExpression> = expr.into();
             let const_entry = f.state.const_expressions.entry(expr.clone());
             if let std::collections::hash_map::Entry::Vacant(const_entry) = const_entry {
-                status
-                    .entry(expr.clone())
-                    .and_modify(|status| {
-                        if matches!(status, CacheStatus::Candidate) {
-                            let var_name = TemplateState::new_var_in(&mut f.state.variables);
-                            prefix_reversed.push(TemplateBlock::Control(
-                                TemplateControl::Assign(var_name.clone(), expr.clone()).into(),
-                            ));
-                            const_entry.insert(TemplateExpression::Literal(var_name).into());
-                            *status = CacheStatus::Cached
-                        }
-                    })
-                    .or_insert_with(|| CacheStatus::Candidate);
+                let var_name = TemplateState::new_var_in(&mut f.state.variables);
+                prefix_reversed.push(TemplateBlock::Control(
+                    TemplateControl::Assign(var_name.clone(), expr.clone()).into(),
+                ));
+                const_entry.insert(TemplateExpression::Literal(var_name).into());
+                //status
+                //    .entry(expr.clone())
+                //    .and_modify(|status| {
+                //        if matches!(status, CacheStatus::Candidate) {
+                //            *status = CacheStatus::Cached
+                //        }
+                //    })
+                //    .or_insert_with(|| CacheStatus::Candidate);
             } else {
             }
         }
@@ -619,6 +619,9 @@ impl TemplateExpression {
     }
     pub fn eq(self: Rc<Self>, rhs: impl Into<Rc<TemplateExpression>>) -> Rc<TemplateExpression> {
         self.op(TemplateOp::Eq, rhs.into())
+    }
+    pub fn ne(self: Rc<Self>, rhs: impl Into<Rc<TemplateExpression>>) -> Rc<TemplateExpression> {
+        self.op(TemplateOp::Ne, rhs.into())
     }
     pub fn and(self: Rc<Self>, rhs: impl Into<Rc<TemplateExpression>>) -> Rc<TemplateExpression> {
         self.op(TemplateOp::And, rhs.into())

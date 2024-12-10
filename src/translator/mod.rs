@@ -353,6 +353,9 @@ impl TryFrom<&ClimateConfig> for Package {
                     EntityType::Number,
                     &format!("{}_valve_closing_degree", radiator.entity_id.id),
                 ));
+                let fully_closed = EntityMember(closing_percent.entity_id(), "max".into())
+                    .to_ha_call()
+                    .to_int();
                 let closing_step = EntityMember(closing_percent.static_entity_id(), "step".into());
                 let is_not_heating = Condition::State {
                     entity_id: radiator.entity_id.clone().into(),
@@ -392,7 +395,11 @@ impl TryFrom<&ClimateConfig> for Package {
                             .acceptable_temperature_difference
                             .or(config.acceptable_temperature_difference)
                             .map(TemplateExpression::literal)
-                            .unwrap_or(acceptable_temperature_difference_step.to_ha_call().to_float())
+                            .unwrap_or(
+                                acceptable_temperature_difference_step
+                                    .to_ha_call()
+                                    .to_float(),
+                            )
                 }
                 .to_int();
                 if room.valve_closing_automation {
@@ -556,30 +563,44 @@ impl TryFrom<&ClimateConfig> for Package {
                     output.automation.push(invalid_closing_values_automation);
                     let template_closing_percent = closing_percent.to_ha_call().to_int();
                     let template_closing_step = closing_step.to_ha_call().to_int();
-                    let mut adjust_steps =
-                        (&*comfortable_temperature_multiplier * template_closing_step.clone()).mark_const_expr();
-                    if let Some(friction) = room.full_close_friction.or(config.full_close_friction)
-                    {
-                        let friction = TemplateExpression::literal(friction);
-                        adjust_steps = TemplateExpression::if_then_else(
-                            (&*template_closing_percent + adjust_steps.clone())
-                                .le(&*max_closing_valve_entity.to_ha_call().to_int()
-                                    - friction.clone()),
-                            adjust_steps.clone(),
-                            &*adjust_steps - friction,
-                        );
-                    }
+                    let adjust_steps =
+                        &*comfortable_temperature_multiplier * template_closing_step.clone();
                     let may_close = Condition::from_template(
                         (&*template_closing_percent + template_closing_step.clone())
                             .le(max_closing_valve_entity.to_ha_call().to_int()),
                     );
                     let may_open = Condition::from_template(
-                        (&*template_closing_percent - template_closing_step)
+                        (&*template_closing_percent - template_closing_step.clone())
                             .ge(min_closing_valve_entity.to_ha_call().to_int()),
                     );
                     let should_change = Condition::from_template(
                         adjust_steps.clone().gt(TemplateExpression::literal(0)),
                     );
+                    let new_closing_no_friction = (&*template_closing_percent
+                        + (&*template_closing_step.clone() * adjust_steps.clone()))
+                    .mark_const_expr();
+                    let new_closing = if let Some(friction) = room
+                        .full_close_friction
+                        .or(config.full_close_friction)
+                        .map(TemplateExpression::literal)
+                    {
+                        TemplateExpression::if_then_else(
+                            template_closing_percent
+                                .clone()
+                                .lt(fully_closed.clone())
+                                .and(new_closing_no_friction.clone().ge(fully_closed).clone()),
+                            &*template_closing_percent
+                                + (&*template_closing_step
+                                    * TemplateExpression::max([
+                                        TemplateExpression::literal(0),
+                                        &*adjust_steps - friction,
+                                    ])
+                                    .unwrap()),
+                            new_closing_no_friction,
+                        )
+                    } else {
+                        new_closing_no_friction
+                    };
                     actions.append(&mut vec![
                         Choose {
                             conditions: vec![Condition::comment("No longer affected by the heat cycle, so check if we should turn the passive heat down."),
@@ -590,7 +611,7 @@ impl TryFrom<&ClimateConfig> for Package {
                                     .and(predicted_above_requested.clone()),
                             )],
                             sequence: vec![Service::SetNumberValue {
-                                data: Service::template_data(TemplateExpression::min([&*template_closing_percent + adjust_steps.clone(), max_closing_valve_entity.to_ha_call().to_int()].into_iter()).unwrap()),
+                                data: Service::template_data(TemplateExpression::min([new_closing, max_closing_valve_entity.to_ha_call().to_int()].into_iter()).unwrap()),
                                 target: closing_percent.entity_id().into(),
                             }
                             .into()],
