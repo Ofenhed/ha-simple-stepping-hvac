@@ -30,10 +30,13 @@ pub struct Package {
 #[derive(Serialize, Clone, Copy, Eq, PartialEq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum Customize {
-    FriendlyName,
     DeviceClass,
+    FriendlyName,
     Hidden,
     Icon,
+    Initial,
+    DisplayPrecision,
+    Round,
 }
 
 impl Package {

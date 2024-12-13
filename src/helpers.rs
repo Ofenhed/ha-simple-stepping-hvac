@@ -237,6 +237,12 @@ impl InsertableIn<Helpers> for InputNumber {
     }
 }
 
+#[derive(Serialize, Clone)]
+pub struct OldStyleGroup {
+    pub name: Rc<str>,
+    pub entities: Vec<EntityId>,
+}
+
 #[derive(Serialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub struct Helpers {
@@ -246,6 +252,7 @@ pub struct Helpers {
     pub template: Option<[TemplateSensorHolder; 1]>,
     #[serde(skip_serializing_if = "HasSensors::is_empty")]
     pub input_number: HashMap<Rc<str>, InputNumber>,
+    pub group: HashMap<Rc<str>, OldStyleGroup>,
 }
 
 impl Helpers {

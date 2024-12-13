@@ -3,6 +3,9 @@ use std::{
     collections::HashMap,
     fmt::Display,
     hash::{Hash, Hasher},
+    ops::{Deref, DerefMut},
+    rc::{Rc, Weak},
+    sync::RwLock,
 };
 
 use serde::Serialize;
@@ -128,5 +131,104 @@ impl<T: CustomizationFor> HasEntityType for T {
 impl<K, V> HasSensors for HashMap<K, V> {
     fn is_empty(&self) -> bool {
         self.is_empty()
+    }
+}
+
+#[derive(Debug)]
+pub struct LinkedTree<T> {
+    value: T,
+    parent: RwLock<Weak<LinkedTree<T>>>,
+    children: RwLock<Vec<Rc<LinkedTree<T>>>>,
+}
+
+impl<T> Deref for LinkedTree<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
+impl<T> DerefMut for LinkedTree<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.value
+    }
+}
+
+impl<T: Clone> LinkedTree<T> {
+    pub fn cloned(&self) -> T {
+        self.value.clone()
+    }
+}
+
+impl<'t, T: std::fmt::Debug + 't> LinkedTree<T> {
+    pub fn new(value: T) -> Rc<Self> {
+        Self {
+            value,
+            parent: Default::default(),
+            children: Default::default(),
+        }
+        .into()
+    }
+    pub fn new_child(self: &Rc<Self>, value: T) -> Rc<Self> {
+        let child: Rc<Self> = Self {
+            value,
+            parent: Rc::downgrade(&self).into(),
+            children: Default::default(),
+        }
+        .into();
+        self.children.write().unwrap().push(child.clone());
+        child
+    }
+
+    pub fn parent(self: &Rc<Self>) -> Option<Rc<Self>> {
+        Weak::upgrade(&self.parent.read().unwrap())
+    }
+
+    pub fn take(self: &Rc<Self>) -> Option<Rc<Self>> {
+        let ret = if let Some(parent) = self.parent() {
+            parent.children.write().unwrap().retain(|x| {
+                eprint!(".");
+                !Rc::ptr_eq(&self, &x)
+            });
+            Some(self.clone())
+        } else {
+            None
+        };
+        *self.parent.write().unwrap() = Weak::default();
+        ret
+    }
+
+    pub fn take_leaf(self: &Rc<Self>) -> Option<Rc<Self>> {
+        if let Some(first_child) = self.children().next() {
+            first_child.take_leaf()
+        } else {
+            self.take()
+        }
+    }
+
+    #[allow(unused)]
+    pub fn children(self: &Rc<Self>) -> impl Iterator<Item = Rc<Self>> {
+        let children = self.children.read().unwrap().clone();
+
+        children.into_iter()
+    }
+
+    pub fn has_children(self: &Rc<Self>) -> bool {
+        !self.children.read().unwrap().is_empty()
+    }
+
+    #[allow(unused)]
+    pub fn replace_parent(self: &Rc<Self>, new: Rc<Self>) {
+        *new.parent.write().unwrap() = Rc::downgrade(&self).into();
+        if let Some(parent) = Weak::upgrade(&self.parent.write().unwrap()) {
+            let mut parents_children = parent.children.write().unwrap();
+            for child in parents_children.iter_mut() {
+                if Rc::ptr_eq(child, &self) {
+                    *child = new.clone();
+                    return;
+                }
+            }
+        }
     }
 }

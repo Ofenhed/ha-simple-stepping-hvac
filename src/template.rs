@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use crate::types::to_string_serialize;
+use crate::types::{to_string_serialize, LinkedTree};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt::Write,
@@ -167,30 +167,46 @@ pub enum TemplateBlock {
     Control(Rc<TemplateControl>),
 }
 
-struct RecursiveIter<T, F: Fn(&TemplateBlock) -> Option<T>> {
-    known: VecDeque<TemplateBlock>,
+struct RecursiveIter<T, S: Clone, F: Fn(Option<&S>, &TemplateBlock) -> Option<(S, T)>> {
+    known: VecDeque<(Option<S>, TemplateBlock)>,
     return_filter: F,
 }
 
-impl<T: std::fmt::Debug, F: Fn(&TemplateBlock) -> Option<T>> Iterator for RecursiveIter<T, F> {
+impl<T, S: Clone, F: Fn(Option<&S>, &TemplateBlock) -> Option<(S, T)>> RecursiveIter<T, S, F> {
+    pub fn new(items: impl IntoIterator<Item = TemplateBlock>, filter: F) -> Self {
+        Self {
+            known: items.into_iter().map(|x| (None, x)).collect(),
+            return_filter: filter,
+        }
+    }
+}
+
+impl<T: std::fmt::Debug, S: Clone, F: Fn(Option<&S>, &TemplateBlock) -> Option<(S, T)>> Iterator
+    for RecursiveIter<T, S, F>
+{
     type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut returned = None;
-        if let Some(item) = self.known.pop_front() {
-            if let Some(ret) = (self.return_filter)(&item) {
+        if let Some((state, item)) = self.known.pop_front() {
+            let parent_state = if let Some((new_parent_state, ret)) =
+                (self.return_filter)(state.as_ref(), &item)
+            {
                 returned = Some(ret);
-            }
+                Some(new_parent_state)
+            } else {
+                state
+            };
             match item {
                 TemplateBlock::Text(_) => todo!(),
                 TemplateBlock::Expr(item) => {
                     for item in item.iter() {
-                        self.known.push_back(item);
+                        self.known.push_back((parent_state.clone(), item));
                     }
                 }
                 TemplateBlock::Control(item) => {
                     for item in item.iter() {
-                        self.known.push_back(item);
+                        self.known.push_back((parent_state.clone(), item));
                     }
                 }
             }
@@ -255,51 +271,62 @@ impl std::fmt::Display for Template {
             f,
             state: &mut state,
         };
-        //enum CacheStatus {
-        //    Candidate,
-        //    Cached,
-        //}
-        //let mut status = HashMap::new();
-        let mut prefix_reversed = vec![];
-        let iterator = RecursiveIter {
-            known: self.content.iter().cloned().collect(),
-            return_filter: |x| {
+        let iterator = RecursiveIter::new(
+            self.content.iter().cloned(),
+            |parent: Option<&Rc<LinkedTree<Rc<TemplateExpression>>>>, x| {
                 if let TemplateBlock::Expr(ref expr) = x {
                     if let TemplateExpression::ConstExpr(ref const_expr) = **expr {
-                        return Some(const_expr.clone());
+                        let state = if let Some(parent) = parent {
+                            parent.new_child(const_expr.clone())
+                        } else {
+                            LinkedTree::new(const_expr.clone())
+                        };
+                        return Some((state.clone(), state));
                     }
                 }
                 None
             },
-        };
-        for expr in iterator {
-            let expr: Rc<TemplateExpression> = expr.into();
-            let const_entry = f.state.const_expressions.entry(expr.clone());
-            if let std::collections::hash_map::Entry::Vacant(const_entry) = const_entry {
-                let var_name = TemplateState::new_var_in(&mut f.state.variables);
-                prefix_reversed.push(TemplateBlock::Control(
-                    TemplateControl::Assign(var_name.clone(), expr.clone()).into(),
-                ));
-                const_entry.insert(TemplateExpression::Literal(var_name).into());
-                //status
-                //    .entry(expr.clone())
-                //    .and_modify(|status| {
-                //        if matches!(status, CacheStatus::Candidate) {
-                //            *status = CacheStatus::Cached
-                //        }
-                //    })
-                //    .or_insert_with(|| CacheStatus::Candidate);
+        );
+        let items = iterator.collect::<Vec<_>>();
+        let mut setters: Vec<(Rc<TemplateExpression>, i32)> = vec![];
+
+        for state in items.into_iter() {
+            while let Some(expr) = state.take_leaf() {
+                if let Some((_, counter)) = setters
+                    .iter_mut()
+                    .find(|(expression, _)| expression == &**expr)
+                {
+                    *counter += 1;
+                } else {
+                    setters.push(((&**expr).clone(), 0));
+                }
+            }
+            let expr: Rc<TemplateExpression> = (**state).clone();
+            if let Some((_, counter)) = setters
+                .iter_mut()
+                .find(|(expression, _)| expression == &expr)
+            {
+                *counter += 1;
             } else {
+                setters.push((expr, 0));
             }
         }
+        //iterator.for_each(top_down_add);
+        let mut prefix = vec![];
+        for (expr, count) in setters.into_iter() {
+            if count == 0 {
+                continue;
+            }
+            let var_name = TemplateState::new_var_in(&mut f.state.variables);
+            prefix.push(TemplateBlock::Control(
+                TemplateControl::Assign(var_name.clone(), expr.clone().clone()).into(),
+            ));
+            f.state
+                .const_expressions
+                .insert(expr, TemplateExpression::Literal(var_name).into());
+        }
 
-        Self::print_contents(
-            prefix_reversed
-                .into_iter()
-                .rev()
-                .chain(self.content.iter().cloned()),
-            f,
-        )
+        Self::print_contents(prefix.into_iter().chain(self.content.iter().cloned()), f)
     }
 }
 
@@ -420,10 +447,7 @@ impl Deref for TemplateVariable {
     }
 }
 
-#[derive(Clone)]
-pub struct TemplateNamespaceVariable(Rc<TemplateExpression>);
-
-impl TemplateNamespaceVariable {
+impl TemplateVariable {
     pub fn member(self: &Self, name: &'static str) -> TemplateVariable {
         TemplateVariable(TemplateExpression::Member(self.0.clone(), name).into())
     }
@@ -447,6 +471,7 @@ impl TemplateState {
 }
 
 impl Template {
+    #[must_use]
     pub fn assign_new(&mut self, expr: impl Into<Rc<TemplateExpression>>) -> TemplateVariable {
         let name = self.state.lock().unwrap().new_var();
         self.content.push(TemplateBlock::Control(
@@ -462,12 +487,12 @@ impl Template {
     pub fn assign_new_namespace(
         &mut self,
         expr: impl IntoIterator<Item = (&'static str, Rc<TemplateExpression>)>,
-    ) -> TemplateNamespaceVariable {
+    ) -> TemplateVariable {
         let expr = expr.into_iter();
         let args: Vec<_> = expr.map(|(name, value)| (Some(name), value)).collect();
         let TemplateVariable(variable) =
             self.assign_new(TemplateExpression::fun("namespace", args));
-        TemplateNamespaceVariable(variable)
+        TemplateVariable(variable)
     }
     pub fn for_each<T>(
         &mut self,
@@ -636,6 +661,33 @@ impl TemplateExpression {
         self.unary(TemplateUnaryOp::IsNotNone)
     }
     pub fn literal(constant: impl ToString) -> Rc<TemplateExpression> {
+        let constant = constant.to_string();
+        let mut checker = constant.chars();
+        let mut has_dot = false;
+        let mut has_e = false;
+        let constant = match checker.next() {
+            Some('-')
+                if checker
+                    .find(|char| match char {
+                        '0'..'9' => false,
+                        '.' if has_dot => true,
+                        '.' => {
+                            has_dot = true;
+                            false
+                        }
+                        'e' | 'E' if has_e => true,
+                        'e' | 'E' => {
+                            has_e = true;
+                            false
+                        }
+                        _ => true,
+                    })
+                    .is_none() =>
+            {
+                format!("({constant})")
+            }
+            _ => constant,
+        };
         TemplateExpression::Literal(constant.to_string().into()).into()
     }
     pub fn fun<I: Into<Rc<TemplateExpression>>>(
@@ -690,7 +742,10 @@ impl TemplateExpression {
         result
     }
     pub fn mark_const_expr(self: Rc<TemplateExpression>) -> Rc<TemplateExpression> {
-        TemplateExpression::ConstExpr(self).into()
+        match &*self {
+            Self::ConstExpr(inner) => inner.clone().mark_const_expr(),
+            _ => Self::ConstExpr(self).into(),
+        }
     }
     pub fn sum<I: Into<Rc<TemplateExpression>>>(
         data: impl IntoIterator<Item = I>,
