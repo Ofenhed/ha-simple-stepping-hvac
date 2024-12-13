@@ -268,6 +268,7 @@ impl TryFrom<&ClimateConfig> for Package {
                 let name = format!("{room_name} temperature change");
                 let entity = output.new_entity_id(DerivativeSensor::entity_type(), &name);
                 output.customize(entity.clone(), Customize::FriendlyName, name);
+                output.customize(entity.clone(), Customize::Hidden, true);
                 EntityMember::state(entity)
             };
             let temperature_entity = temperature_entity;
@@ -286,6 +287,7 @@ impl TryFrom<&ClimateConfig> for Package {
                 let name = format!("{room_name} temperature trend");
                 let entity = output.new_entity_id(DerivativeSensor::entity_type(), &name);
                 output.customize(entity.clone(), Customize::FriendlyName, name);
+                output.customize(entity.clone(), Customize::Hidden, true);
                 EntityMember::state(entity)
             };
             let trend_sensor = DerivativeSensor {

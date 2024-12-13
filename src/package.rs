@@ -32,7 +32,7 @@ pub struct Package {
 pub enum Customize {
     FriendlyName,
     DeviceClass,
-    Initial,
+    Hidden,
     Icon,
 }
 
