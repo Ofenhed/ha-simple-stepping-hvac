@@ -27,6 +27,20 @@ pub enum TemplateOp {
 }
 
 impl TemplateOp {
+    fn invert(self) -> Option<Self> {
+        match self {
+            Self::Gt => Some(Self::Le),
+            Self::Ge => Some(Self::Lt),
+            Self::Lt => Some(Self::Ge),
+            Self::Le => Some(Self::Gt),
+            Self::Eq => Some(Self::Ne),
+            Self::Ne => Some(Self::Eq),
+            _ => None,
+        }
+    }
+}
+
+impl TemplateOp {
     fn fmt_raw_template(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Add => f.write_str("+"),
@@ -657,6 +671,16 @@ impl TemplateExpression {
     }
     pub fn or(self: Rc<Self>, rhs: impl Into<Rc<TemplateExpression>>) -> Rc<TemplateExpression> {
         self.op(TemplateOp::Or, rhs.into())
+    }
+    pub fn not(self: Rc<Self>) -> Rc<TemplateExpression> {
+        self.raise_constexpr(|value| match &*value {
+            Self::Op(this, op, rhs) => op
+                .invert()
+                .map(|op| Self::Op(this.clone(), op, rhs.clone()).into())
+                .unwrap_or(value.unary(TemplateUnaryOp::Not))
+                .into(),
+            _ => value.unary(TemplateUnaryOp::Not),
+        })
     }
     pub fn is_none(self: Rc<Self>) -> Rc<TemplateExpression> {
         self.unary(TemplateUnaryOp::IsNone)

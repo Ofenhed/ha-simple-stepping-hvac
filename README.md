@@ -64,16 +64,19 @@ trend_spanning: # The time window for which the derivate of the temperature deri
 backoff_after_heat: # The temperature will be affected by invalid data after the radiator has been in heat mode. This disables cooling after such a period.
   minutes: 15
 full_close_friction: true # Makes it sligtly harder to reach 100% closed
+stored_traces: 15 # Default value, how many traces to store for each automation
 rooms:
   Kitchen: # Name is only for grouping and logs
     temperature_sensor: sensor.kitchen_temperature
     radiators:
       - entity_id: climate.kitchen_radiator_1
     valve_closing_automation: true # Currently required, just go with it
+    stored_traces: 10 # Stored traces can be overwritten per room
   Living Room:
     radiators:
       - entity_id: climate.living_room_radiator_1
       - entity_id: climate.living_room_radiator_2
+        stored_traces: 50 # And stored traces can be overwritten per radiator
     valve_closing_automation: true
   Bathroom:
     radiators:

@@ -417,6 +417,11 @@ impl TryFrom<&ClimateConfig> for Package {
                 derivate_entity.clone(),
                 trend_entity.clone(),
             ]);
+            let too_warm = predicted_temperature_entity
+                .to_ha_call()
+                .to_float()
+                .gt(chosen_temperature.to_ha_call().to_float())
+                .mark_const_expr();
 
             output.helpers.insert((), prediction_sensor);
             output.helpers.insert((), derivate_sensor);
@@ -469,12 +474,13 @@ impl TryFrom<&ClimateConfig> for Package {
                         enabled: true,
                     })],
                 }];
-                let predicted_above_requested = chosen_temperature.clone().smaller_than_entity(
-                    predicted_temperature_entity
-                        .clone()
-                        .state_entity()
-                        .expect("Current temperature must be a state"),
-                );
+                let predicted_above_requested_condition =
+                    chosen_temperature.clone().smaller_than_entity(
+                        predicted_temperature_entity
+                            .clone()
+                            .state_entity()
+                            .expect("Current temperature must be a state"),
+                    );
                 let comfortable_temperature_multiplier = {
                     let chosen_temperature = add_automation_entity(chosen_temperature.clone())
                         .to_ha_call()
@@ -484,15 +490,13 @@ impl TryFrom<&ClimateConfig> for Package {
                             .to_ha_call()
                             .to_float();
                     TemplateExpression::if_then_else(
-                        predicted_temperature_entity
-                            .clone()
-                            .lt(chosen_temperature.clone()),
-                        &*(&*chosen_temperature - predicted_temperature_entity.clone())
-                            / add_automation_entity(cold_sensitivity.clone())
+                        too_warm.clone(),
+                        &*(&*predicted_temperature_entity - chosen_temperature.clone())
+                            / add_automation_entity(heat_sensitivity.clone())
                                 .to_ha_call()
                                 .to_float(),
-                        &*(&*predicted_temperature_entity - chosen_temperature)
-                            / add_automation_entity(heat_sensitivity.clone())
+                        &*(&*chosen_temperature - predicted_temperature_entity)
+                            / add_automation_entity(cold_sensitivity.clone())
                                 .to_ha_call()
                                 .to_float(),
                     )
@@ -692,7 +696,7 @@ impl TryFrom<&ClimateConfig> for Package {
                         adjust_steps.clone().gt(TemplateExpression::literal(0)),
                     );
                     let new_closing_no_friction =
-                        (&*template_closing_percent + (&*adjust_steps)).mark_const_expr();
+                        (&*template_closing_percent + adjust_steps.clone()).mark_const_expr();
                     let new_closing = if let Some(friction) =
                         full_close_friction.clone().and_then(|x| {
                             if room.full_close_friction.unwrap_or(true) {
@@ -715,13 +719,9 @@ impl TryFrom<&ClimateConfig> for Package {
                             .clone()
                             .lt(fully_closed.clone())
                             .and(
-                                &*template_closing_percent
-                                    + TemplateExpression::max([
-                                        TemplateExpression::literal(0),
-                                        &*adjust_steps - friction.clone(),
-                                    ])
-                                    .unwrap()
-                                    .ge(fully_closed.clone()),
+                                (&*(&*template_closing_percent + adjust_steps.clone())
+                                    - friction.clone())
+                                .ge(fully_closed.clone()),
                             );
                         TemplateExpression::if_then_else(
                             to_almost_fully_closed,
@@ -747,24 +747,32 @@ impl TryFrom<&ClimateConfig> for Package {
                         .into_iter(),
                     )
                     .unwrap();
-                    let log_previous = Action::log(radiator.entity_id.clone(), |msg| {
-                        msg.text("Calculated temperature in 1 hour is ");
-                        msg.expr(predicted_temperature_entity.entity_id().to_ha_call_pretty());
-                        msg.text(". Valves were at ");
-                        msg.expr(closing_percent.entity_id().to_ha_call_pretty());
-                        msg.text(" before this update.");
-                        msg.text(" (t=");
-                        msg.expr(temperature_entity.entity_id().to_ha_call_pretty());
-                        msg.text(", dt=");
-                        msg.expr(derivate_entity.entity_id().to_ha_call_pretty());
-                        msg.text(", ddt=");
-                        msg.expr(trend_entity.entity_id().to_ha_call_pretty());
-                        msg.text(", tt=");
-                        msg.expr(chosen_temperature.entity_id().to_ha_call_pretty());
-                        msg.text(", steps=");
-                        msg.expr(adjust_steps.clone());
-                        msg.text(")");
-                    });
+                    let log_previous =
+                        Action::log(closing_percent.state_entity().unwrap(), |msg| {
+                            msg.text("Calculated temperature in 1 hour is ");
+                            msg.expr(predicted_temperature_entity.entity_id().to_ha_call_pretty());
+                            msg.text(". Valves were at ");
+                            msg.expr(closing_percent.entity_id().to_ha_call_pretty());
+                            msg.text(" before this update.");
+                            msg.text(" (t=");
+                            msg.expr(temperature_entity.entity_id().to_ha_call_pretty());
+                            msg.text(", dt=");
+                            msg.expr(derivate_entity.entity_id().to_ha_call_pretty());
+                            msg.text(", ddt=");
+                            msg.expr(trend_entity.entity_id().to_ha_call_pretty());
+                            msg.text(", tt=");
+                            msg.expr(chosen_temperature.entity_id().to_ha_call_pretty());
+                            msg.text(", steps=");
+                            msg.expr(
+                                &*adjust_steps
+                                    * TemplateExpression::if_then_else(
+                                        too_warm.clone(),
+                                        TemplateExpression::literal(1),
+                                        TemplateExpression::literal(-1),
+                                    ),
+                            );
+                            msg.text(")");
+                        });
                     actions.append(&mut vec![
                         Choose {
                             conditions: vec![Condition::comment("No longer affected by the heat cycle, so check if we should turn the passive heat down."),
@@ -772,7 +780,7 @@ impl TryFrom<&ClimateConfig> for Package {
                                 may_close
                                     .and(after_heat_backoff)
                                     .and(should_change.clone())
-                                    .and(predicted_above_requested.clone()),
+                                    .and(predicted_above_requested_condition.clone()),
                             )],
                             sequence: vec![
                                 log_previous.clone(),
@@ -788,7 +796,7 @@ impl TryFrom<&ClimateConfig> for Package {
                                 may_open
                                     .and(is_not_heating.clone())
                                     .and(should_change)
-                                    .and(predicted_above_requested.not().clone()),
+                                    .and(predicted_above_requested_condition.not().clone()),
                             )],
                             sequence: vec![
                                 log_previous,
@@ -821,7 +829,13 @@ impl TryFrom<&ClimateConfig> for Package {
                             "Automatic minimum valve opening for {}",
                             radiator.entity_id.assumed_friendly_name()
                         )),
-                        trace: Some(TraceOptions { stored_traces: 15 }),
+                        trace: Some(TraceOptions {
+                            stored_traces: radiator
+                                .stored_traces
+                                .or(room.stored_traces)
+                                .or(config.stored_traces)
+                                .unwrap_or(15),
+                        }),
                         trigger: [
                             Trigger::State {
                                 entity_id: radiator.entity_id.clone().into(),

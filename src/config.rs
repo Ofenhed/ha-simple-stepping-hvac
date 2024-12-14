@@ -8,6 +8,8 @@ use crate::{entity_id::EntityId, helpers::Duration};
 #[serde(deny_unknown_fields)]
 pub struct RadiatorConfig {
     pub entity_id: EntityId,
+    #[serde(default)]
+    pub stored_traces: Option<u8>,
 }
 
 #[derive(Deserialize, Default)]
@@ -25,6 +27,8 @@ pub struct Room {
     //pub acceptable_temperature_difference: Option<f32>,
     #[serde(default)]
     pub full_close_friction: Option<bool>,
+    #[serde(default)]
+    pub stored_traces: Option<u8>,
 }
 
 #[derive(Deserialize)]
@@ -44,4 +48,6 @@ pub struct ClimateConfig {
     pub trend_spanning: Duration,
     pub backoff_after_heat: Duration,
     pub wait_between_adjustments: Option<Duration>,
+    #[serde(default)]
+    pub stored_traces: Option<u8>,
 }
