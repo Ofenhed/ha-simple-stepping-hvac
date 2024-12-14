@@ -78,6 +78,7 @@ fn temperature_template_sensor(name: String, template: impl Into<Template>) -> T
 struct RoomTemperatureSensors {
     chosen_temperature: EntityMember,
     current_temperature_average: EntityMember,
+    external_weight: Option<EntityMember>,
 }
 
 impl Package {
@@ -161,9 +162,11 @@ impl Package {
             TemplateExpression::literal(1),
             TemplateExpression::literal(-1),
         );
+        let mut maybe_external_weight = None;
         if let Some((external_temperature, external_weight)) = externals {
             let weight =
                 &*external_weight.to_ha_call().to_float() / TemplateExpression::literal(100);
+            maybe_external_weight = Some(external_weight);
             divider = &*divider + weight.clone();
             temperature_sum =
                 &*temperature_sum + (&*external_temperature.to_ha_call().to_float() * weight);
@@ -203,6 +206,7 @@ impl Package {
         RoomTemperatureSensors {
             chosen_temperature,
             current_temperature_average,
+            external_weight: maybe_external_weight,
         }
     }
 }
@@ -320,10 +324,16 @@ impl TryFrom<&ClimateConfig> for Package {
             let RoomTemperatureSensors {
                 chosen_temperature,
                 current_temperature_average: temperature_entity,
+                external_weight,
             } = output.build(room_name, room, &radiator_temperature_offset);
             internal_entities
                 .entities
                 .push(temperature_entity.entity_id());
+            if let Some(external_weight) = external_weight {
+                individual_configuration_entities
+                    .entities
+                    .push(external_weight.entity_id());
+            }
             {
                 let name = format!("{room_name} current temperature");
                 let entity = output.new_entity_id(TemplateSensor::entity_type(), &name);
