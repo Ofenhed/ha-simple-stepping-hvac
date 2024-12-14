@@ -21,8 +21,8 @@ will generate a [package
 definition](https://www.home-assistant.io/docs/configuration/packages/), which
 you can then upload to home assistant.
 
-I would recommend running this package in a VM, to avoid manual review of the
-source code.
+I would recommend running this program in a VM to limit how much you need to
+trust me.
 
 > [!NOTE]
 > I apologize for such a long letter - I didn't have time to write a short
