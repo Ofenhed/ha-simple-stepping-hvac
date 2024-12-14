@@ -549,7 +549,11 @@ impl TryFrom<&ClimateConfig> for Package {
                         output.customize(
                             entity.clone(),
                             Customize::Initial,
-                            config.wait_between_adjustments.to_seconds() / 60,
+                            config
+                                .wait_between_adjustments
+                                .as_ref()
+                                .map(|x| x.to_seconds() / 60)
+                                .unwrap_or(600),
                         );
                         output.customize(
                             entity.clone(),

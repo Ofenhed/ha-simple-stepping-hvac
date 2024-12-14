@@ -42,5 +42,5 @@ pub struct ClimateConfig {
     pub full_close_friction: Option<usize>,
     pub trend_spanning: Duration,
     pub backoff_after_heat: Duration,
-    pub wait_between_adjustments: Duration,
+    pub wait_between_adjustments: Option<Duration>,
 }
