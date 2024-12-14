@@ -21,8 +21,8 @@ pub struct Room {
     pub derivative_spanning: Option<Duration>,
     #[serde(default)]
     pub trend_spanning: Option<Duration>,
-    #[serde(default)]
-    pub acceptable_temperature_difference: Option<f32>,
+    //#[serde(default)]
+    //pub acceptable_temperature_difference: Option<f32>,
     #[serde(default)]
     pub full_close_friction: Option<usize>,
 }

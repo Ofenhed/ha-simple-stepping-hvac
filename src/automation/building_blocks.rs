@@ -2,13 +2,13 @@ use serde::Serialize;
 
 use super::{Action, Condition};
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct Choose {
     pub conditions: Vec<Condition>,
     pub sequence: Vec<Action>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(tag = "condition", content = "conditions")]
 pub enum ConditionalActions {
     #[allow(unused)]

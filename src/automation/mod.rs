@@ -249,7 +249,7 @@ impl Condition {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct Value<T> {
     value: T,
 }
@@ -260,7 +260,7 @@ impl<T> From<T> for Value<T> {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(untagged)]
 pub enum TemplatableValue<T> {
     #[allow(unused)]
@@ -269,7 +269,7 @@ pub enum TemplatableValue<T> {
     Template(Template),
 }
 
-impl<T, I: Into<Rc<TemplateExpression>>> From<I> for TemplatableValue<T> {
+impl<T, I: Into<Template>> From<I> for TemplatableValue<T> {
     fn from(value: I) -> Self {
         Self::Template(value.into().into())
     }
@@ -283,7 +283,7 @@ impl<T, I: Into<Rc<TemplateExpression>>> From<I> for ServiceData<TemplatableValu
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct ActionTarget {
     pub entity_id: EntityId,
 }
@@ -294,7 +294,7 @@ impl From<EntityId> for ActionTarget {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct ServiceData<T> {
     pub value: T,
 }
@@ -313,7 +313,34 @@ impl Service {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
+pub struct LogData {
+    pub name: Rc<str>,
+    pub message: TemplatableValue<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entity_id: Option<EntityId>,
+}
+
+impl Action {
+    #[must_use]
+    pub fn log(entity_id: EntityId, callback: impl Fn(&mut Template)) -> Action {
+        let mut template = Default::default();
+        callback(&mut template);
+        Action::from(LogData {
+            name: entity_id.assumed_friendly_name().into(),
+            entity_id: Some(entity_id),
+            message: template.into(),
+        })
+    }
+}
+
+impl From<LogData> for Service {
+    fn from(data: LogData) -> Self {
+        Service::Log { data }
+    }
+}
+
+#[derive(Serialize, Clone)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum Service {
     #[serde(rename = "input_number.set_value")]
@@ -326,6 +353,8 @@ pub enum Service {
         data: ServiceData<TemplatableValue<Value<usize>>>,
         target: ActionTarget,
     },
+    #[serde(rename = "logbook.log")]
+    Log { data: LogData },
 }
 
 impl From<Service> for Action {
@@ -334,7 +363,13 @@ impl From<Service> for Action {
     }
 }
 
-#[derive(Serialize)]
+impl From<LogData> for Action {
+    fn from(data: LogData) -> Self {
+        Action::Service(Service::Log { data })
+    }
+}
+
+#[derive(Serialize, Clone)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum Action {
     #[serde(untagged)]
@@ -355,7 +390,7 @@ impl Action {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct Stop {
     pub stop: Rc<str>,
     pub enabled: bool,

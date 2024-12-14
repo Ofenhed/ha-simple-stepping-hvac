@@ -61,23 +61,6 @@ fn temperature_in_1_hour(
     );
     template.expr(temperature.round(2));
     template
-    //JinjaTemplate(
-    //    format!(
-    //        "
-    //    {{%- set trend = {trend} %}}
-    //    {{%- set calc = namespace(temperature = {temperature}, derivate = {derivate}) %}}
-    //    {{%- for iteration in range(0, {iterations}) %}}
-    //    {{%- set calc.temperature = calc.temperature + calc.derivate / {iterations} %}}
-    //    {{%- set calc.derivate = calc.derivate + trend / {iterations} %}}
-    //    {{%- endfor %}}
-    //    {{{{ calc.temperature | round(2) }}}}",
-    //        temperature = temperature.to_ha_call().to_float().as_raw_template(),
-    //        derivate = derivate.to_ha_call().to_float().as_raw_template(),
-    //        trend = trend.to_ha_call().to_float().as_raw_template(),
-    //        iterations = 12
-    //    )
-    //    .into(),
-    //)
 }
 
 fn temperature_template_sensor(name: String, template: impl Into<Template>) -> TemplateSensor {
@@ -119,7 +102,7 @@ impl Package {
                 max: 1000.into(),
                 step: 5.into(),
                 icon: Some("mdi:scale-unbalanced".into()),
-                mode: Default::default(),
+                mode: InputNumberMode::Box,
             };
             self.customize(entity.clone(), Customize::Initial, 100);
             self.customize(
@@ -273,20 +256,25 @@ impl TryFrom<&ClimateConfig> for Package {
             output.helpers.insert(entity.clone(), input);
             EntityMember::state(entity)
         };
-        let acceptable_temperature_difference_step = {
-            let name = "Radiator temperature precision";
+        let sensitivity = [
+            ("heat", config.acceptable_temperature_difference),
+            ("cold", config.acceptable_temperature_difference),
+        ]
+        .into_iter()
+        .map(|(what, initial)| {
+            let name = format!("Radiator temperature {what} sensitivity");
             let entity = output.new_entity_id(InputNumber::entity_type(), &name);
             let input = InputNumber {
                 name: Some(name.into()),
                 unit_of_measurement: UnitOfMeasurement::Celcius,
-                min: ComparableNumber::Float(0.25),
+                min: ComparableNumber::Float(0.05),
                 max: 2.into(),
-                step: ComparableNumber::Float(0.25),
+                step: ComparableNumber::Float(0.05),
                 icon: Some("mdi:tape-measure".into()),
                 mode: InputNumberMode::Box,
             };
             global_configuration_entities.entities.push(entity.clone());
-            output.customize(entity.clone(), Customize::Initial, 0.75);
+            output.customize(entity.clone(), Customize::Initial, initial.unwrap_or(0.75));
             output.customize(
                 entity.clone(),
                 Customize::DeviceClass,
@@ -294,6 +282,10 @@ impl TryFrom<&ClimateConfig> for Package {
             );
             output.helpers.insert(entity.clone(), input);
             EntityMember::state(entity)
+        })
+        .collect::<Vec<_>>();
+        let Some([cold_sensitivity, heat_sensitivity]) = sensitivity.first_chunk() else {
+            unreachable!()
         };
         for (room_name, room) in config.rooms.iter() {
             let never_triggered = Condition::Template {
@@ -457,16 +449,19 @@ impl TryFrom<&ClimateConfig> for Package {
                         add_automation_entity(predicted_temperature_entity.clone())
                             .to_ha_call()
                             .to_float();
-                    &*(&*chosen_temperature - predicted_temperature_entity).abs()
-                        / room
-                            .acceptable_temperature_difference
-                            .or(config.acceptable_temperature_difference)
-                            .map(TemplateExpression::literal)
-                            .unwrap_or(
-                                acceptable_temperature_difference_step
-                                    .to_ha_call()
-                                    .to_float(),
-                            )
+                    TemplateExpression::if_then_else(
+                        chosen_temperature
+                            .clone()
+                            .gt(predicted_temperature_entity.clone()),
+                        &*(&*chosen_temperature - predicted_temperature_entity.clone())
+                            / add_automation_entity(heat_sensitivity.clone())
+                                .to_ha_call()
+                                .to_float(),
+                        &*(&*predicted_temperature_entity - chosen_temperature)
+                            / add_automation_entity(cold_sensitivity.clone())
+                                .to_ha_call()
+                                .to_float(),
+                    )
                 }
                 .mark_const_expr()
                 .to_int();
@@ -484,7 +479,7 @@ impl TryFrom<&ClimateConfig> for Package {
                             max: 100.into(),
                             step: 1.into(),
                             icon: Some("mdi:valve".into()),
-                            mode: Default::default(),
+                            mode: InputNumberMode::Slider,
                         };
                         individual_configuration_entities
                             .entities
@@ -515,7 +510,7 @@ impl TryFrom<&ClimateConfig> for Package {
                             max: 100.into(),
                             step: 1.into(),
                             icon: Some("mdi:valve-closed".into()),
-                            mode: Default::default(),
+                            mode: InputNumberMode::Slider,
                         };
                         individual_configuration_entities
                             .entities
@@ -562,7 +557,9 @@ impl TryFrom<&ClimateConfig> for Package {
                             DeviceClass::Duration,
                         );
                         output.helpers.insert(entity.clone(), input);
-                        let time = EntityMember::state(entity).to_ha_call().to_float();
+                        let time = add_automation_entity(EntityMember::state(entity))
+                            .to_ha_call()
+                            .to_float();
                         let sixty = TemplateExpression::literal(60);
                         let hours = (&*time / sixty.clone()).to_int();
                         let minutes = (&*time % sixty.clone()).to_int();
@@ -680,6 +677,32 @@ impl TryFrom<&ClimateConfig> for Package {
                     } else {
                         new_closing_no_friction
                     };
+                    let new_closing_ranged = TemplateExpression::min(
+                        [new_closing, max_closing_valve_entity.to_ha_call().to_int()].into_iter(),
+                    )
+                    .unwrap();
+                    let new_opening_ranged = TemplateExpression::max(
+                        [
+                            &*template_closing_percent - adjust_steps,
+                            min_closing_valve_entity.to_ha_call().to_int(),
+                        ]
+                        .into_iter(),
+                    )
+                    .unwrap();
+                    let log_previous = Action::log(radiator.entity_id.clone(), |msg| {
+                        msg.text("Calculated temperature in 1 hour is ");
+                        msg.expr(predicted_temperature_entity.entity_id().to_ha_call_pretty());
+                        msg.text(". Valves were at ");
+                        msg.expr(closing_percent.entity_id().to_ha_call_pretty());
+                        msg.text(" before this update.");
+                        msg.text(" (t=");
+                        msg.expr(temperature_entity.entity_id().to_ha_call_pretty());
+                        msg.text(", dt=");
+                        msg.expr(derivate_entity.entity_id().to_ha_call_pretty());
+                        msg.text(",ddt=");
+                        msg.expr(trend_entity.entity_id().to_ha_call_pretty());
+                        msg.text(")");
+                    });
                     actions.append(&mut vec![
                         Choose {
                             conditions: vec![Condition::comment("No longer affected by the heat cycle, so check if we should turn the passive heat down."),
@@ -689,8 +712,10 @@ impl TryFrom<&ClimateConfig> for Package {
                                     .and(should_change.clone())
                                     .and(predicted_above_requested.clone()),
                             )],
-                            sequence: vec![Service::SetNumberValue {
-                                data: Service::template_data(TemplateExpression::min([new_closing, max_closing_valve_entity.to_ha_call().to_int()].into_iter()).unwrap()),
+                            sequence: vec![
+                                log_previous.clone(),
+                                Service::SetNumberValue {
+                                data: Service::template_data(new_closing_ranged),
                                 target: closing_percent.entity_id().into(),
                             }
                             .into()],
@@ -703,9 +728,11 @@ impl TryFrom<&ClimateConfig> for Package {
                                     .and(should_change)
                                     .and(predicted_above_requested.not().clone()),
                             )],
-                            sequence: vec![Service::SetNumberValue {
+                            sequence: vec![
+                                log_previous,
+                                Service::SetNumberValue {
                                 data: {
-                                    Service::template_data(TemplateExpression::max([&*template_closing_percent - adjust_steps, min_closing_valve_entity.to_ha_call().to_int()].into_iter()).unwrap())
+                                    Service::template_data(new_opening_ranged)
                                 },
                                 target: closing_percent.entity_id().into(),
                             }

@@ -156,6 +156,7 @@ impl<T> DerefMut for LinkedTree<T> {
 }
 
 impl<T: Clone> LinkedTree<T> {
+    #[allow(unused)]
     pub fn cloned(&self) -> T {
         self.value.clone()
     }
@@ -187,10 +188,11 @@ impl<'t, T: std::fmt::Debug + 't> LinkedTree<T> {
 
     pub fn take(self: &Rc<Self>) -> Option<Rc<Self>> {
         let ret = if let Some(parent) = self.parent() {
-            parent.children.write().unwrap().retain(|x| {
-                eprint!(".");
-                !Rc::ptr_eq(&self, &x)
-            });
+            parent
+                .children
+                .write()
+                .unwrap()
+                .retain(|x| !Rc::ptr_eq(&self, &x));
             Some(self.clone())
         } else {
             None
@@ -214,6 +216,7 @@ impl<'t, T: std::fmt::Debug + 't> LinkedTree<T> {
         children.into_iter()
     }
 
+    #[allow(unused)]
     pub fn has_children(self: &Rc<Self>) -> bool {
         !self.children.read().unwrap().is_empty()
     }

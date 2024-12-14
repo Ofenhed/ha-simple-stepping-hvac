@@ -198,7 +198,7 @@ impl<T: std::fmt::Debug, S: Clone, F: Fn(Option<&S>, &TemplateBlock) -> Option<(
                 state
             };
             match item {
-                TemplateBlock::Text(_) => todo!(),
+                TemplateBlock::Text(_) => (),
                 TemplateBlock::Expr(item) => {
                     for item in item.iter() {
                         self.known.push_back((parent_state.clone(), item));
@@ -515,6 +515,10 @@ impl Template {
     }
     pub fn expr(&mut self, content: impl Into<Rc<TemplateExpression>>) {
         self.content.push(TemplateBlock::Expr(content.into()))
+    }
+    pub fn text(&mut self, content: impl ToString) {
+        self.content
+            .push(TemplateBlock::Text(content.to_string().into()))
     }
 }
 

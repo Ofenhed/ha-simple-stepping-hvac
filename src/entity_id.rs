@@ -37,6 +37,17 @@ impl EntityId {
         }
     }
 
+    pub fn to_ha_call_pretty(&self) -> Rc<TemplateExpression> {
+        TemplateExpression::fun(
+            "states",
+            [
+                (None, TemplateExpression::string(self.to_string())),
+                (Some("rounded"), TemplateExpression::bool(true)),
+                (Some("with_unit"), TemplateExpression::bool(true)),
+            ],
+        )
+        .mark_const_expr()
+    }
     pub fn assumed_friendly_name(&self) -> String {
         let mut capital = true;
         self.id
