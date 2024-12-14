@@ -63,7 +63,7 @@ trend_spanning: # The time window for which the derivate of the temperature deri
   minutes: 15
 backoff_after_heat: # The temperature will be affected by invalid data after the radiator has been in heat mode. This disables cooling after such a period.
   minutes: 15
-full_close_friction: 1 # Makes it sligtly harder to reach 100% closed
+full_close_friction: true # Makes it sligtly harder to reach 100% closed
 rooms:
   Kitchen: # Name is only for grouping and logs
     temperature_sensor: sensor.kitchen_temperature
@@ -72,7 +72,12 @@ rooms:
     valve_closing_automation: true # Currently required, just go with it
   Living Room:
     radiators:
-      - entity_id: climate.living_room_east_radiator
-      - entity_id: climate.living_room_west_radiator
+      - entity_id: climate.living_room_radiator_1
+      - entity_id: climate.living_room_radiator_2
     valve_closing_automation: true
+  Bathroom:
+    radiators:
+      - entity_id: climate.living_room_radiator
+    valve_closing_automation: true
+    full_close_friction: false # Exclude bathroom from full close friction
 ```

@@ -98,6 +98,8 @@ pub enum UnitOfMeasurement {
     #[serde(rename = "%")]
     Percent,
     Minutes,
+    #[serde(rename = "")]
+    None,
 }
 
 #[derive(Serialize)]

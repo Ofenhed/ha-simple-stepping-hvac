@@ -24,7 +24,7 @@ pub struct Room {
     //#[serde(default)]
     //pub acceptable_temperature_difference: Option<f32>,
     #[serde(default)]
-    pub full_close_friction: Option<usize>,
+    pub full_close_friction: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -39,7 +39,8 @@ pub struct ClimateConfig {
     #[serde(default)]
     pub default_max_closing_percent: Option<u8>,
     pub derivative_spanning: Duration,
-    pub full_close_friction: Option<usize>,
+    #[serde(default)]
+    pub full_close_friction: bool,
     pub trend_spanning: Duration,
     pub backoff_after_heat: Duration,
     pub wait_between_adjustments: Option<Duration>,

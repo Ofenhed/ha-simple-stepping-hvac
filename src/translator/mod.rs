@@ -256,6 +256,30 @@ impl TryFrom<&ClimateConfig> for Package {
             output.helpers.insert(entity.clone(), input);
             EntityMember::state(entity)
         };
+        let full_close_friction = if config.full_close_friction {
+            let name = "Extra friction to fully close";
+            let entity = output.new_entity_id(InputNumber::entity_type(), &name);
+            let input = InputNumber {
+                name: Some(name.into()),
+                unit_of_measurement: UnitOfMeasurement::None,
+                min: 0.into(),
+                max: 10.into(),
+                step: ComparableNumber::Float(0.5),
+                icon: Some("mdi:slope-uphill".into()),
+                mode: InputNumberMode::Box,
+            };
+            global_configuration_entities.entities.push(entity.clone());
+            output.customize(entity.clone(), Customize::Initial, 2);
+            output.customize(
+                entity.clone(),
+                Customize::DeviceClass,
+                DeviceClass::PowerFactor,
+            );
+            output.helpers.insert(entity.clone(), input);
+            Some(EntityMember::state(entity))
+        } else {
+            None
+        };
         let sensitivity = [
             ("heat", config.acceptable_temperature_difference),
             ("cold", config.acceptable_temperature_difference),
@@ -284,7 +308,7 @@ impl TryFrom<&ClimateConfig> for Package {
             EntityMember::state(entity)
         })
         .collect::<Vec<_>>();
-        let Some([cold_sensitivity, heat_sensitivity]) = sensitivity.first_chunk() else {
+        let Some([heat_sensitivity, cold_sensitivity]) = sensitivity.first_chunk() else {
             unreachable!()
         };
         for (room_name, room) in config.rooms.iter() {
@@ -450,15 +474,15 @@ impl TryFrom<&ClimateConfig> for Package {
                             .to_ha_call()
                             .to_float();
                     TemplateExpression::if_then_else(
-                        chosen_temperature
+                        predicted_temperature_entity
                             .clone()
-                            .gt(predicted_temperature_entity.clone()),
+                            .lt(chosen_temperature.clone()),
                         &*(&*chosen_temperature - predicted_temperature_entity.clone())
-                            / add_automation_entity(heat_sensitivity.clone())
+                            / add_automation_entity(cold_sensitivity.clone())
                                 .to_ha_call()
                                 .to_float(),
                         &*(&*predicted_temperature_entity - chosen_temperature)
-                            / add_automation_entity(cold_sensitivity.clone())
+                            / add_automation_entity(heat_sensitivity.clone())
                                 .to_ha_call()
                                 .to_float(),
                     )
@@ -659,24 +683,44 @@ impl TryFrom<&ClimateConfig> for Package {
                     );
                     let new_closing_no_friction =
                         (&*template_closing_percent + (&*adjust_steps)).mark_const_expr();
-                    let new_closing = if let Some(friction) = room
-                        .full_close_friction
-                        .or(config.full_close_friction)
-                        .map(TemplateExpression::literal)
-                    {
-                        TemplateExpression::if_then_else(
-                            template_closing_percent
-                                .clone()
-                                .lt(fully_closed.clone())
-                                .and(new_closing_no_friction.clone().ge(fully_closed).clone()),
-                            &*template_closing_percent
-                                + (&*template_closing_step
-                                    * TemplateExpression::max([
+                    let new_closing = if let Some(friction) =
+                        full_close_friction.clone().and_then(|x| {
+                            if room.full_close_friction.unwrap_or(true) {
+                                Some(x)
+                            } else {
+                                None
+                            }
+                        }) {
+                        let friction = friction.to_ha_call().to_float();
+                        let almost_fully_closed = &*fully_closed - template_closing_step;
+                        let to_almost_fully_closed = template_closing_percent
+                            .clone()
+                            .lt(almost_fully_closed.clone())
+                            .and(
+                                new_closing_no_friction
+                                    .clone()
+                                    .ge(almost_fully_closed.clone()),
+                            );
+                        let to_fully_closed = template_closing_percent
+                            .clone()
+                            .lt(fully_closed.clone())
+                            .and(
+                                &*template_closing_percent
+                                    + TemplateExpression::max([
                                         TemplateExpression::literal(0),
-                                        &*adjust_steps - friction,
+                                        &*adjust_steps - friction.clone(),
                                     ])
-                                    .unwrap()),
-                            new_closing_no_friction,
+                                    .unwrap()
+                                    .ge(fully_closed.clone()),
+                            );
+                        TemplateExpression::if_then_else(
+                            to_almost_fully_closed,
+                            almost_fully_closed.clone(),
+                            TemplateExpression::if_then_else(
+                                to_fully_closed,
+                                fully_closed,
+                                new_closing_no_friction,
+                            ),
                         )
                     } else {
                         new_closing_no_friction
@@ -687,7 +731,7 @@ impl TryFrom<&ClimateConfig> for Package {
                     .unwrap();
                     let new_opening_ranged = TemplateExpression::max(
                         [
-                            &*template_closing_percent - adjust_steps,
+                            &*template_closing_percent - adjust_steps.clone(),
                             min_closing_valve_entity.to_ha_call().to_int(),
                         ]
                         .into_iter(),
@@ -703,8 +747,12 @@ impl TryFrom<&ClimateConfig> for Package {
                         msg.expr(temperature_entity.entity_id().to_ha_call_pretty());
                         msg.text(", dt=");
                         msg.expr(derivate_entity.entity_id().to_ha_call_pretty());
-                        msg.text(",ddt=");
+                        msg.text(", ddt=");
                         msg.expr(trend_entity.entity_id().to_ha_call_pretty());
+                        msg.text(", tt=");
+                        msg.expr(chosen_temperature.entity_id().to_ha_call_pretty());
+                        msg.text(", steps=");
+                        msg.expr(adjust_steps.clone());
                         msg.text(")");
                     });
                     actions.append(&mut vec![
