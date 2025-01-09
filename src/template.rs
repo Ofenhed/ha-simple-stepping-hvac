@@ -706,6 +706,7 @@ impl TemplateExpression {
             _ => fun(self.clone(), &mut name),
         }
     }
+    #[allow(unused)]
     fn raise_constexpr(
         self: &Rc<Self>,
         fun: impl Fn(Rc<TemplateExpression>) -> Rc<TemplateExpression>,
