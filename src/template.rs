@@ -153,7 +153,7 @@ pub enum TemplateControl {
 }
 impl TemplateControl {
     fn fmt_raw_template(&self, f: &mut Formatter) -> std::fmt::Result {
-        f.write_str("{% ")?;
+        f.write_str("{%\n  ")?;
         match self {
             Self::Assign(value, expr) => {
                 f.write_str("set ")?;
@@ -164,12 +164,12 @@ impl TemplateControl {
             Self::For(value, expr, body) => {
                 f.write_fmt(format_args!("for {value} in "))?;
                 expr.fmt_raw_template(f)?;
-                f.write_str(" %}")?;
+                f.write_str("\n%}")?;
                 Template::print_contents(body.iter().cloned(), f)?;
-                f.write_str("{% endfor")?;
+                f.write_str("{%\nendfor")?;
             }
         }
-        f.write_str(" %}")
+        f.write_str("\n%}")
     }
     pub fn iter(&self) -> impl Iterator<Item = TemplateBlock> {
         let mut iter = vec![];
