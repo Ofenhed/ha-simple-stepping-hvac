@@ -166,7 +166,7 @@ impl TemplateControl {
                 expr.fmt_raw_template(f)?;
                 f.write_str("\n%}")?;
                 Template::print_contents(body.iter().cloned(), f)?;
-                f.write_str("{%\nendfor")?;
+                f.write_str("{%\n  endfor")?;
             }
         }
         f.write_str("\n%}")
