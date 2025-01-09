@@ -1,6 +1,9 @@
 use serde::Serialize;
 
-use crate::types::{to_string_serialize, LinkedTree};
+use crate::{
+    entity_id::EntityId,
+    types::{to_string_serialize, LinkedTree},
+};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt::Write,
@@ -63,6 +66,7 @@ impl TemplateOp {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TemplateUnaryOp {
     Not,
+    Neg,
     IsNone,
     IsNotNone,
 }
@@ -112,6 +116,11 @@ impl TemplateUnaryOp {
                 expr.fmt_raw_template(f)?;
                 f.write_str(" is not none)")
             }
+            Self::Neg => {
+                f.write_str("(-(")?;
+                expr.fmt_raw_template(f)?;
+                f.write_str("))")
+            }
         }
     }
 }
@@ -134,6 +143,7 @@ pub enum TemplateExpression {
     Literal(Rc<str>),
     String(Rc<str>),
     ConstExpr(Rc<TemplateExpression>),
+    NamedConstExpr(Rc<str>, Rc<TemplateExpression>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -179,6 +189,7 @@ pub enum TemplateBlock {
     Text(Rc<str>),
     Expr(Rc<TemplateExpression>),
     Control(Rc<TemplateControl>),
+    Optional(Rc<TemplateBlock>),
 }
 
 struct RecursiveIter<T, S: Clone, F: Fn(Option<&S>, &TemplateBlock) -> Option<(S, T)>> {
@@ -218,6 +229,9 @@ impl<T: std::fmt::Debug, S: Clone, F: Fn(Option<&S>, &TemplateBlock) -> Option<(
                         self.known.push_back((parent_state.clone(), item));
                     }
                 }
+                TemplateBlock::Optional(item) => self
+                    .known
+                    .push_back((parent_state.clone(), Rc::unwrap_or_clone(item))),
                 TemplateBlock::Control(item) => {
                     for item in item.iter() {
                         self.known.push_back((parent_state.clone(), item));
@@ -261,18 +275,20 @@ impl Template {
         f: &mut Formatter<'_, '_>,
     ) -> std::fmt::Result {
         use TemplateBlock as B;
-        for block in content.into_iter() {
+        fn print_block(block: &B, f: &mut Formatter<'_, '_>) -> std::fmt::Result {
             match block {
-                B::Text(text) => f.write_str(&text)?,
-                B::Control(expr) => {
-                    expr.fmt_raw_template(f)?;
-                }
+                B::Text(text) => f.write_str(&text),
+                B::Control(expr) => expr.fmt_raw_template(f),
+                B::Optional(block) => print_block(&block, f),
                 B::Expr(expr) => {
                     f.write_str("{{ ")?;
                     expr.fmt_raw_template(f)?;
-                    f.write_str(" }}")?;
+                    f.write_str(" }}")
                 }
             }
+        }
+        for block in content.into_iter() {
+            print_block(&block, f)?;
         }
         Ok(())
     }
@@ -287,51 +303,77 @@ impl std::fmt::Display for Template {
         };
         let iterator = RecursiveIter::new(
             self.content.iter().cloned(),
-            |parent: Option<&Rc<LinkedTree<Rc<TemplateExpression>>>>, x| {
+            |parent: Option<&(
+                bool,
+                Rc<LinkedTree<(Option<Rc<str>>, Rc<TemplateExpression>)>>,
+            )>,
+             x| {
+                if let (Some((false, parent)), TemplateBlock::Optional(_)) = (parent, x) {
+                    return Some(((true, parent.clone()), None));
+                }
                 if let TemplateBlock::Expr(ref expr) = x {
-                    if let TemplateExpression::ConstExpr(ref const_expr) = **expr {
-                        let state = if let Some(parent) = parent {
-                            parent.new_child(const_expr.clone())
+                    if let Some((name, const_expr)) = match **expr {
+                        TemplateExpression::ConstExpr(ref const_expr) => Some((None, const_expr)),
+                        TemplateExpression::NamedConstExpr(ref name, ref const_expr) => {
+                            Some((Some(name), const_expr))
+                        }
+                        _ => None,
+                    } {
+                        let state = if let Some((optional, parent)) = parent {
+                            (
+                                *optional,
+                                parent.new_child((name.cloned(), const_expr.clone())),
+                            )
                         } else {
-                            LinkedTree::new(const_expr.clone())
+                            (false, LinkedTree::new((name.cloned(), const_expr.clone())))
                         };
-                        return Some((state.clone(), state));
+                        return Some((state.clone(), Some(state)));
                     }
                 }
                 None
             },
         );
         let items = iterator.collect::<Vec<_>>();
-        let mut setters: Vec<(Rc<TemplateExpression>, i32)> = vec![];
+        let mut setters: Vec<(Rc<TemplateExpression>, Option<Rc<str>>, i32)> = vec![];
 
         for state in items.into_iter() {
+            let Some((optional, state)) = state else {
+                continue;
+            };
             while let Some(expr) = state.take_leaf() {
-                if let Some((_, counter)) = setters
+                if let Some((_, name, counter)) = setters
                     .iter_mut()
-                    .find(|(expression, _)| expression == &**expr)
+                    .find(|(expression, ..)| expression == &expr.1)
                 {
-                    *counter += 1;
+                    if !optional {
+                        *counter += 1;
+                    }
+                    if let (previous @ None, Some(new_name)) = (name, expr.0.clone()) {
+                        *previous = Some(new_name.clone());
+                    }
                 } else {
-                    setters.push(((&**expr).clone(), 0));
+                    setters.push(((expr.1).clone(), expr.0.clone(), 0));
                 }
             }
-            let expr: Rc<TemplateExpression> = (**state).clone();
-            if let Some((_, counter)) = setters
+            let expr: Rc<TemplateExpression> = state.1.clone();
+            if let Some((_, _, counter)) = setters
                 .iter_mut()
-                .find(|(expression, _)| expression == &expr)
+                .find(|(expression, ..)| expression == &expr)
             {
-                *counter += 1;
+                if !optional {
+                    *counter += 1;
+                }
             } else {
-                setters.push((expr, 0));
+                setters.push((expr, state.0.clone(), 0));
             }
         }
         //iterator.for_each(top_down_add);
         let mut prefix = vec![];
-        for (expr, count) in setters.into_iter() {
+        for (expr, name, count) in setters.into_iter() {
             if count == 0 {
                 continue;
             }
-            let var_name = TemplateState::new_var_in(&mut f.state.variables);
+            let var_name = TemplateState::new_var_in(name.as_deref(), &mut f.state.variables);
             prefix.push(TemplateBlock::Control(
                 TemplateControl::Assign(var_name.clone(), expr.clone().clone()).into(),
             ));
@@ -363,7 +405,7 @@ impl TemplateExpression {
                 rc1.fmt_raw_template(f)?;
                 f.write_str(")")
             }
-            Self::ConstExpr(expr) => f
+            Self::ConstExpr(expr) | Self::NamedConstExpr(_, expr) => f
                 .state
                 .const_expressions
                 .get(expr)
@@ -417,25 +459,33 @@ impl TemplateExpression {
     }
     pub fn iter(&self) -> impl Iterator<Item = TemplateBlock> {
         let mut iter = vec![];
+        let mut push_expr = |expr| iter.push(TemplateBlock::Expr(expr));
         match self {
             Self::Op(rc, _, rc1) | Self::Pipe(rc, rc1) => {
-                iter.push(rc.clone());
-                iter.push(rc1.clone());
+                push_expr(rc.clone());
+                push_expr(rc1.clone());
             }
-            Self::Member(rc, _) | Self::Unary(_, rc) | Self::ConstExpr(rc) => {
-                iter.push(rc.clone());
+            Self::Member(rc, _)
+            | Self::Unary(_, rc)
+            | Self::ConstExpr(rc)
+            | Self::NamedConstExpr(_, rc) => {
+                push_expr(rc.clone());
             }
             Self::Call(_, rc) => {
-                iter.append(&mut rc.iter().map(|(_, expr)| expr).cloned().collect());
+                rc.iter().for_each(|(_, expr)| push_expr(expr.clone()));
             }
             Self::IfThenElse { r#if, then, r#else } => {
-                iter.push(r#if.clone());
-                iter.push(then.clone());
-                iter.push(r#else.clone());
+                push_expr(r#if.clone());
+                iter.push(TemplateBlock::Optional(
+                    TemplateBlock::Expr(r#then.clone()).into(),
+                ));
+                iter.push(TemplateBlock::Optional(
+                    TemplateBlock::Expr(r#else.clone()).into(),
+                ));
             }
             Self::Literal(_) | Self::String(_) => (),
         }
-        iter.into_iter().map(|x| TemplateBlock::Expr(x).into())
+        iter.into_iter()
     }
     fn to_raw_template(&self) -> Rc<str> {
         struct Print<'a>(&'a TemplateExpression);
@@ -468,10 +518,20 @@ impl TemplateVariable {
 }
 
 impl TemplateState {
-    fn new_var_in(variables: &mut HashSet<Rc<str>>) -> Rc<str> {
-        let mut idx = variables.len();
+    #[must_use]
+    fn new_var_in(prefix: Option<&str>, variables: &mut HashSet<Rc<str>>) -> Rc<str> {
+        let (mut idx, prefix) = if let Some(prefix) = prefix {
+            (0, prefix)
+        } else {
+            (variables.len(), "v")
+        };
+        let prefix = EntityId::encode_string(prefix);
         let name = loop {
-            let name: Rc<str> = Rc::from(format!("v{idx}"));
+            let name: Rc<str> = if idx == 0 {
+                prefix.clone().into()
+            } else {
+                Rc::from(format!("{prefix}{idx}"))
+            };
             if variables.insert(name.clone()) {
                 break name;
             }
@@ -479,8 +539,9 @@ impl TemplateState {
         };
         name
     }
+    #[must_use]
     fn new_var(&mut self) -> Rc<str> {
-        Self::new_var_in(&mut self.variables)
+        Self::new_var_in(None, &mut self.variables)
     }
 }
 
@@ -498,6 +559,7 @@ impl Template {
             TemplateControl::Assign(name.0.to_raw_template(), expr.into()).into(),
         ))
     }
+    #[must_use]
     pub fn assign_new_namespace(
         &mut self,
         expr: impl IntoIterator<Item = (&'static str, Rc<TemplateExpression>)>,
@@ -623,14 +685,35 @@ impl Rem for &TemplateExpression {
 }
 
 impl TemplateExpression {
+    fn raise_named_constexpr(
+        self: &Rc<Self>,
+        fun: impl Fn(Rc<TemplateExpression>, &mut Option<Rc<str>>) -> Rc<TemplateExpression>,
+    ) -> Rc<TemplateExpression> {
+        let mut name = if let TemplateExpression::NamedConstExpr(name, _) = &**self {
+            Some(name.clone())
+        } else {
+            None
+        };
+        match &**self {
+            TemplateExpression::ConstExpr(x) | TemplateExpression::NamedConstExpr(_, x) => {
+                let new = fun(x.clone(), &mut name);
+                if let Some(name) = name {
+                    new.mark_named_const_expr(name)
+                } else {
+                    new.mark_const_expr()
+                }
+            }
+            _ => fun(self.clone(), &mut name),
+        }
+    }
     fn raise_constexpr(
         self: &Rc<Self>,
         fun: impl Fn(Rc<TemplateExpression>) -> Rc<TemplateExpression>,
     ) -> Rc<TemplateExpression> {
-        match &**self {
-            TemplateExpression::ConstExpr(x) => fun(x.clone()).mark_const_expr(),
-            _ => fun(self.clone()),
-        }
+        self.raise_named_constexpr(|expr, name| {
+            *name = None;
+            fun(expr)
+        })
     }
     pub fn bool(value: bool) -> Rc<TemplateExpression> {
         Self::Literal(if value { "True" } else { "False" }.into()).into()
@@ -673,13 +756,32 @@ impl TemplateExpression {
         self.op(TemplateOp::Or, rhs.into())
     }
     pub fn not(self: Rc<Self>) -> Rc<TemplateExpression> {
-        self.raise_constexpr(|value| match &*value {
-            Self::Op(this, op, rhs) => op
-                .invert()
-                .map(|op| Self::Op(this.clone(), op, rhs.clone()).into())
-                .unwrap_or(value.unary(TemplateUnaryOp::Not))
-                .into(),
-            _ => value.unary(TemplateUnaryOp::Not),
+        self.raise_named_constexpr(|value, name| match &*value {
+            Self::Op(this, op, rhs) => {
+                *name = None;
+                op.invert()
+                    .map(|op| Self::Op(this.clone(), op, rhs.clone()).into())
+                    .unwrap_or(value.unary(TemplateUnaryOp::Not))
+                    .into()
+            }
+            _ => {
+                name.as_mut()
+                    .map(|name| *name = format!("not_{name}").into());
+                value.unary(TemplateUnaryOp::Not)
+            }
+        })
+    }
+    pub fn neg(self: Rc<Self>) -> Rc<TemplateExpression> {
+        self.raise_named_constexpr(|value, name| match &*value {
+            Self::Unary(TemplateUnaryOp::Neg, new_self) => {
+                *name = None;
+                new_self.clone()
+            }
+            _ => {
+                name.as_mut()
+                    .map(|name| *name = format!("neg_{name}").into());
+                value.unary(TemplateUnaryOp::Neg)
+            }
         })
     }
     pub fn is_none(self: Rc<Self>) -> Rc<TemplateExpression> {
@@ -734,10 +836,10 @@ impl TemplateExpression {
         Self::fun(fun, [(None, self)])
     }
     pub fn to_float(self: Rc<Self>) -> Rc<TemplateExpression> {
-        self.raise_constexpr(|this| this.call_on_self("float"))
+        self.raise_named_constexpr(|this, _| this.call_on_self("float"))
     }
     pub fn to_int(self: Rc<Self>) -> Rc<TemplateExpression> {
-        self.raise_constexpr(|this| this.call_on_self("int"))
+        self.raise_named_constexpr(|this, _| this.call_on_self("int"))
     }
     pub fn pipe_to(
         self: Rc<Self>,
@@ -771,8 +873,19 @@ impl TemplateExpression {
     }
     pub fn mark_const_expr(self: Rc<TemplateExpression>) -> Rc<TemplateExpression> {
         match &*self {
-            Self::ConstExpr(inner) => inner.clone().mark_const_expr(),
+            Self::ConstExpr(_) | Self::NamedConstExpr(..) => self.clone(),
             _ => Self::ConstExpr(self).into(),
+        }
+    }
+    pub fn mark_named_const_expr(
+        self: Rc<TemplateExpression>,
+        name: impl Into<Rc<str>>,
+    ) -> Rc<TemplateExpression> {
+        match &*self {
+            Self::ConstExpr(inner) | Self::NamedConstExpr(_, inner) => {
+                Self::NamedConstExpr(name.into(), inner.clone()).into()
+            }
+            _ => Self::NamedConstExpr(name.into(), self).into(),
         }
     }
     pub fn sum<I: Into<Rc<TemplateExpression>>>(

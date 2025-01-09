@@ -33,7 +33,7 @@ impl EntityId {
     pub fn external(r#type: EntityType, id: &str) -> Self {
         Self {
             r#type,
-            id: EntityId::encode_string(id),
+            id: EntityId::encode_string(id).into(),
         }
     }
 
@@ -68,7 +68,7 @@ impl EntityId {
 }
 
 impl EntityId {
-    pub fn encode_string(name: &str) -> Rc<str> {
+    pub fn encode_string(name: &str) -> String {
         let mut encoded = name.to_lowercase().replace(' ', "_").replace('.', "_");
         encoded.retain(|c| (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || (c == '_'));
         encoded.into()
@@ -97,6 +97,9 @@ impl HasEntityId for EntityMember {
 }
 
 impl EntityMember {
+    pub fn to_ha_call_named(&self, name: impl Into<Rc<str>>) -> Rc<TemplateExpression> {
+        self.to_ha_call().mark_named_const_expr(name)
+    }
     pub fn to_ha_call(&self) -> Rc<TemplateExpression> {
         match &self.1 {
             EntityMemberType::State => TemplateExpression::fun(
@@ -106,7 +109,7 @@ impl EntityMember {
                     (Some("rounded"), TemplateExpression::bool(false)),
                 ],
             )
-            .mark_const_expr(),
+            .mark_named_const_expr(self.0.id.clone()),
             EntityMemberType::Attribute(cow) => TemplateExpression::fun(
                 "state_attr",
                 [
@@ -114,7 +117,7 @@ impl EntityMember {
                     (None, TemplateExpression::string(cow.clone())),
                 ],
             )
-            .mark_const_expr(),
+            .mark_named_const_expr(format!("{}_{}", self.0.id, cow)),
         }
     }
 

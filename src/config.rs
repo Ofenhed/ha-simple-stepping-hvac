@@ -10,6 +10,10 @@ pub struct RadiatorConfig {
     pub entity_id: EntityId,
     #[serde(default)]
     pub stored_traces: Option<u8>,
+    #[serde(default)]
+    pub full_close_friction: Option<bool>,
+    #[serde(default)]
+    pub full_close_only_at_real_temperature: Option<bool>,
 }
 
 #[derive(Deserialize, Default)]
@@ -28,6 +32,8 @@ pub struct Room {
     #[serde(default)]
     pub full_close_friction: Option<bool>,
     #[serde(default)]
+    pub full_close_only_at_real_temperature: Option<bool>,
+    #[serde(default)]
     pub stored_traces: Option<u8>,
 }
 
@@ -45,6 +51,8 @@ pub struct ClimateConfig {
     pub derivative_spanning: Duration,
     #[serde(default)]
     pub full_close_friction: bool,
+    #[serde(default)]
+    pub full_close_only_at_real_temperature: Option<bool>,
     pub trend_spanning: Duration,
     pub backoff_after_heat: Duration,
     pub wait_between_adjustments: Option<Duration>,

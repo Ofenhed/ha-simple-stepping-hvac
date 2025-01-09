@@ -39,10 +39,10 @@ fn temperature_in_1_hour(
     trend: EntityMember,
 ) -> Template {
     let mut template = Template::default();
-    let trend = template.assign_new(trend.to_ha_call().to_float());
+    let trend = template.assign_new(trend.to_ha_call_named("trend").to_float());
     let namespace = template.assign_new_namespace([
-        ("t", temperature.to_ha_call().to_float()),
-        ("d", derivate.to_ha_call().to_float()),
+        ("t", temperature.to_ha_call_named("temp").to_float()),
+        ("d", derivate.to_ha_call_named("derivate").to_float()),
     ]);
     let temperature_name = namespace.member("t");
     let temperature = temperature_name.deref().clone();
@@ -164,12 +164,14 @@ impl Package {
         );
         let mut maybe_external_weight = None;
         if let Some((external_temperature, external_weight)) = externals {
-            let weight =
-                &*external_weight.to_ha_call().to_float() / TemplateExpression::literal(100);
+            let weight = &*external_weight
+                .to_ha_call_named("external_weight")
+                .to_float()
+                / TemplateExpression::literal(100);
             maybe_external_weight = Some(external_weight);
             divider = &*divider + weight.clone();
-            temperature_sum =
-                &*temperature_sum + (&*external_temperature.to_ha_call().to_float() * weight);
+            temperature_sum = &*temperature_sum
+                + (&*external_temperature.to_ha_call_named("external").to_float() * weight);
         }
         temperature_sum = &*temperature_sum + (&*TemplateExpression::literal(0.00_01) * jitter);
         current_temperature_template.expr(&*temperature_sum / divider);
@@ -182,12 +184,14 @@ impl Package {
         let chosen_temperature = {
             let temperature_template: Rc<TemplateExpression> =
                 &*match &room_chosen_temperature_entities[..] {
-                    [single_radiator] => single_radiator.to_ha_call().to_float(),
-                    ref multiple => {
-                        TemplateExpression::max(multiple.iter().map(|x| x.to_ha_call().to_float()))
-                            .expect("There are at least one radiator")
-                    }
-                } + temperature_offset.to_ha_call().to_float();
+                    [single_radiator] => single_radiator.to_ha_call_named("radiator").to_float(),
+                    ref multiple => TemplateExpression::max(
+                        multiple
+                            .iter()
+                            .map(|x| x.to_ha_call_named("radiators").to_float()),
+                    )
+                    .expect("There are at least one radiator"),
+                } + temperature_offset.to_ha_call_named("offset").to_float();
             let template_name = format!("{} target temperature", room_name);
             let entity_id = self.new_entity_id(TemplateSensor::entity_type(), &template_name);
             self.customize(entity_id.clone(), Customize::FriendlyName, template_name);
@@ -267,8 +271,8 @@ impl TryFrom<&ClimateConfig> for Package {
                 name: Some(name.into()),
                 unit_of_measurement: UnitOfMeasurement::None,
                 min: 0.into(),
-                max: 10.into(),
-                step: ComparableNumber::Float(0.5),
+                max: 20.into(),
+                step: ComparableNumber::Int(1),
                 icon: Some("mdi:slope-uphill".into()),
                 mode: InputNumberMode::Box,
             };
@@ -339,7 +343,10 @@ impl TryFrom<&ClimateConfig> for Package {
                 let entity = output.new_entity_id(TemplateSensor::entity_type(), &name);
                 let mut sensor = temperature_template_sensor(
                     entity.id.to_string(),
-                    temperature_entity.to_ha_call().to_float().round(1),
+                    temperature_entity
+                        .to_ha_call_named("temp_now")
+                        .to_float()
+                        .round(1),
                 );
                 sensor.set_availability_from(&[temperature_entity.clone()]);
                 output.customize(entity.clone(), Customize::FriendlyName, name);
@@ -417,11 +424,19 @@ impl TryFrom<&ClimateConfig> for Package {
                 derivate_entity.clone(),
                 trend_entity.clone(),
             ]);
+            let chosen_temperature_value = chosen_temperature
+                .to_ha_call_named("chosen_temp")
+                .to_float();
             let too_warm = predicted_temperature_entity
+                .to_ha_call_named("predicted_temp")
+                .to_float()
+                .gt(chosen_temperature_value.clone())
+                .mark_named_const_expr("too_warm");
+            let too_warm_now = temperature_entity
                 .to_ha_call()
                 .to_float()
-                .gt(chosen_temperature.to_ha_call().to_float())
-                .mark_const_expr();
+                .gt(chosen_temperature_value)
+                .mark_named_const_expr("too_warm_now");
 
             output.helpers.insert((), prediction_sensor);
             output.helpers.insert((), derivate_sensor);
@@ -451,8 +466,10 @@ impl TryFrom<&ClimateConfig> for Package {
                     EntityType::Number,
                     &format!("{}_valve_closing_degree", radiator.entity_id.id),
                 ));
+                let closing_percent_value =
+                    closing_percent.to_ha_call_named("closing_percent").to_int();
                 let fully_closed = EntityMember(closing_percent.entity_id(), "max".into())
-                    .to_ha_call()
+                    .to_ha_call_named("fully_closed")
                     .to_int();
                 let closing_step = EntityMember(closing_percent.static_entity_id(), "step".into());
                 let is_not_heating = Condition::State {
@@ -481,7 +498,7 @@ impl TryFrom<&ClimateConfig> for Package {
                             .state_entity()
                             .expect("Current temperature must be a state"),
                     );
-                let comfortable_temperature_multiplier = {
+                let comfortable_temperature_multiplier_abs = {
                     let chosen_temperature = add_automation_entity(chosen_temperature.clone())
                         .to_ha_call()
                         .to_float();
@@ -493,15 +510,15 @@ impl TryFrom<&ClimateConfig> for Package {
                         too_warm.clone(),
                         &*(&*predicted_temperature_entity - chosen_temperature.clone())
                             / add_automation_entity(heat_sensitivity.clone())
-                                .to_ha_call()
+                                .to_ha_call_named("heat_sensitivity")
                                 .to_float(),
                         &*(&*chosen_temperature - predicted_temperature_entity)
                             / add_automation_entity(cold_sensitivity.clone())
-                                .to_ha_call()
+                                .to_ha_call_named("cold_sensitivity")
                                 .to_float(),
                     )
                 }
-                .mark_const_expr()
+                .mark_named_const_expr("comfortable_temp_multiplier")
                 .to_int();
                 if room.valve_closing_automation {
                     let min_closing_valve_entity = {
@@ -677,84 +694,128 @@ impl TryFrom<&ClimateConfig> for Package {
                         }
                     };
                     output.automation.push(invalid_closing_values_automation);
-                    let template_closing_percent = closing_percent.to_ha_call().to_int();
-                    let template_closing_step = closing_step.to_ha_call().to_int();
-                    let adjust_steps = (&*comfortable_temperature_multiplier
+                    let template_closing_percent = closing_percent_value.clone();
+                    let template_closing_step =
+                        closing_step.to_ha_call_named("closing_step").to_int();
+                    let adjust_steps_abs = (&*comfortable_temperature_multiplier_abs.clone()
                         * template_closing_step.clone())
-                    .mark_const_expr();
+                    .mark_named_const_expr("adjust_steps_abs");
+                    let adjust_steps = TemplateExpression::if_then_else(
+                        too_warm.clone(),
+                        adjust_steps_abs.clone(),
+                        adjust_steps_abs.clone().neg(),
+                    );
                     let may_close = Condition::from_template(
                         (&*template_closing_percent + template_closing_step.clone())
                             .le(max_closing_valve_entity.to_ha_call().to_int())
-                            .mark_const_expr(),
+                            .mark_named_const_expr("may_close"),
                     );
                     let may_open = Condition::from_template(
                         (&*template_closing_percent - template_closing_step.clone())
                             .ge(min_closing_valve_entity.to_ha_call().to_int())
-                            .mark_const_expr(),
+                            .mark_named_const_expr("may_open"),
                     );
                     let should_change = Condition::from_template(
-                        adjust_steps.clone().gt(TemplateExpression::literal(0)),
+                        adjust_steps_abs.clone().gt(TemplateExpression::literal(0)),
                     );
-                    let new_closing_no_friction =
-                        (&*template_closing_percent + adjust_steps.clone()).mark_const_expr();
+                    let almost_fully_closed = (&*fully_closed - template_closing_step)
+                        .mark_named_const_expr("almost_closed");
+                    let new_valve_percent = {
+                        let new_closing_percent = (&*template_closing_percent
+                            + adjust_steps.clone())
+                        .mark_named_const_expr("new_closing");
+                        if radiator
+                            .full_close_only_at_real_temperature
+                            .or(room.full_close_only_at_real_temperature)
+                            .or(config.full_close_only_at_real_temperature)
+                            .unwrap_or(false)
+                        {
+                            TemplateExpression::if_then_else(
+                                too_warm_now.clone().not().and(
+                                    new_closing_percent.clone().gt(almost_fully_closed.clone()),
+                                ),
+                                almost_fully_closed.clone(),
+                                new_closing_percent,
+                            )
+                        } else {
+                            new_closing_percent
+                        }
+                    };
                     let new_closing = if let Some(friction) =
                         full_close_friction.clone().and_then(|x| {
-                            if room.full_close_friction.unwrap_or(true) {
+                            if radiator
+                                .full_close_friction
+                                .or(room.full_close_friction)
+                                .unwrap_or(true)
+                            {
                                 Some(x)
                             } else {
                                 None
                             }
                         }) {
-                        let friction = friction.to_ha_call().to_float();
-                        let almost_fully_closed = &*fully_closed - template_closing_step;
+                        let friction = add_automation_entity(friction)
+                            .to_ha_call_named("friction")
+                            .to_int();
                         let to_almost_fully_closed = template_closing_percent
                             .clone()
                             .lt(almost_fully_closed.clone())
-                            .and(
-                                new_closing_no_friction
-                                    .clone()
-                                    .ge(almost_fully_closed.clone()),
-                            );
+                            .and(new_valve_percent.clone().ge(almost_fully_closed.clone()));
                         let to_fully_closed = template_closing_percent
                             .clone()
                             .lt(fully_closed.clone())
-                            .and(
-                                (&*(&*template_closing_percent + adjust_steps.clone())
-                                    - friction.clone())
-                                .ge(fully_closed.clone()),
-                            );
+                            .and(new_valve_percent.clone().ge(fully_closed.clone()));
+                        let passes_friction = adjust_steps_abs.clone().gt(friction);
                         TemplateExpression::if_then_else(
                             to_almost_fully_closed,
                             almost_fully_closed.clone(),
                             TemplateExpression::if_then_else(
                                 to_fully_closed,
-                                fully_closed,
-                                new_closing_no_friction,
+                                TemplateExpression::if_then_else(
+                                    passes_friction,
+                                    fully_closed,
+                                    almost_fully_closed,
+                                ),
+                                new_valve_percent.clone(),
                             ),
                         )
                     } else {
-                        new_closing_no_friction
+                        new_valve_percent.clone()
                     };
                     let new_closing_ranged = TemplateExpression::min(
-                        [new_closing, max_closing_valve_entity.to_ha_call().to_int()].into_iter(),
-                    )
-                    .unwrap();
-                    let new_opening_ranged = TemplateExpression::max(
                         [
-                            &*template_closing_percent - adjust_steps.clone(),
-                            min_closing_valve_entity.to_ha_call().to_int(),
+                            new_closing,
+                            max_closing_valve_entity
+                                .to_ha_call_named("max_closing")
+                                .to_int(),
                         ]
                         .into_iter(),
                     )
                     .unwrap();
-                    let log_previous =
-                        Action::log(closing_percent.state_entity().unwrap(), |msg| {
+                    let new_opening_ranged = TemplateExpression::max(
+                        [
+                            new_valve_percent,
+                            min_closing_valve_entity
+                                .to_ha_call_named("min_closing")
+                                .to_int(),
+                        ]
+                        .into_iter(),
+                    )
+                    .unwrap();
+                    let would_open = Condition::from_template(
+                        new_opening_ranged.clone().ne(closing_percent_value.clone()),
+                    );
+                    let would_close = Condition::from_template(
+                        new_closing_ranged.clone().ne(closing_percent_value.clone()),
+                    );
+                    let log_previous = |expr: Rc<TemplateExpression>| {
+                        Action::log(radiator.entity_id.clone(), |msg| {
                             msg.text("Calculated temperature in 1 hour is ");
                             msg.expr(predicted_temperature_entity.entity_id().to_ha_call_pretty());
-                            msg.text(". Valves were at ");
+                            msg.text(". Valves set to ");
+                            msg.expr(expr.clone());
+                            msg.text(". (was=");
                             msg.expr(closing_percent.entity_id().to_ha_call_pretty());
-                            msg.text(" before this update.");
-                            msg.text(" (t=");
+                            msg.text(", t=");
                             msg.expr(temperature_entity.entity_id().to_ha_call_pretty());
                             msg.text(", dt=");
                             msg.expr(derivate_entity.entity_id().to_ha_call_pretty());
@@ -763,16 +824,10 @@ impl TryFrom<&ClimateConfig> for Package {
                             msg.text(", tt=");
                             msg.expr(chosen_temperature.entity_id().to_ha_call_pretty());
                             msg.text(", steps=");
-                            msg.expr(
-                                &*adjust_steps
-                                    * TemplateExpression::if_then_else(
-                                        too_warm.clone(),
-                                        TemplateExpression::literal(1),
-                                        TemplateExpression::literal(-1),
-                                    ),
-                            );
+                            msg.expr(adjust_steps.clone());
                             msg.text(")");
-                        });
+                        })
+                    };
                     actions.append(&mut vec![
                         Choose {
                             conditions: vec![Condition::comment("No longer affected by the heat cycle, so check if we should turn the passive heat down."),
@@ -780,10 +835,11 @@ impl TryFrom<&ClimateConfig> for Package {
                                 may_close
                                     .and(after_heat_backoff)
                                     .and(should_change.clone())
-                                    .and(predicted_above_requested_condition.clone()),
+                                    .and(predicted_above_requested_condition.clone())
+                                    .and(would_close)
                             )],
                             sequence: vec![
-                                log_previous.clone(),
+                                log_previous(new_closing_ranged.clone()),
                                 Service::SetNumberValue {
                                 data: Service::template_data(new_closing_ranged),
                                 target: closing_percent.entity_id().into(),
@@ -796,10 +852,11 @@ impl TryFrom<&ClimateConfig> for Package {
                                 may_open
                                     .and(is_not_heating.clone())
                                     .and(should_change)
-                                    .and(predicted_above_requested_condition.not().clone()),
+                                    .and(predicted_above_requested_condition.not().clone())
+                                    .and(would_open)
                             )],
                             sequence: vec![
-                                log_previous,
+                                log_previous(new_opening_ranged.clone()),
                                 Service::SetNumberValue {
                                 data: {
                                     Service::template_data(new_opening_ranged)
@@ -863,21 +920,21 @@ impl TryFrom<&ClimateConfig> for Package {
             }
         }
         output.helpers.group.insert(
-            with_prefix("individual_configuration"),
+            with_prefix("individual_configuration").into(),
             individual_configuration_entities,
         );
         output.helpers.group.insert(
-            with_prefix("global_configuration"),
+            with_prefix("global_configuration").into(),
             global_configuration_entities,
         );
         output
             .helpers
             .group
-            .insert(with_prefix("internal_entities"), internal_entities);
+            .insert(with_prefix("internal_entities").into(), internal_entities);
         output
             .helpers
             .group
-            .insert(with_prefix("status_entities"), status_entities);
+            .insert(with_prefix("status_entities").into(), status_entities);
         Ok(output)
     }
 }
