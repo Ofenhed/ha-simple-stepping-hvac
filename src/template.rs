@@ -513,7 +513,7 @@ impl Deref for TemplateVariable {
 
 impl TemplateVariable {
     pub fn member(self: &Self, name: &'static str) -> TemplateVariable {
-        TemplateVariable(TemplateExpression::Member(self.0.clone(), name).into())
+        TemplateVariable(self.0.clone().member(name))
     }
 }
 
@@ -718,6 +718,9 @@ impl TemplateExpression {
     }
     pub fn bool(value: bool) -> Rc<TemplateExpression> {
         Self::Literal(if value { "True" } else { "False" }.into()).into()
+    }
+    pub fn member(self: &Rc<Self>, name: &'static str) -> Rc<TemplateExpression> {
+        Self::Member(self.clone(), name).into()
     }
     pub fn string(value: impl Into<Rc<str>>) -> Rc<TemplateExpression> {
         Self::String(value.into()).into()

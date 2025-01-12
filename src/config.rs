@@ -37,6 +37,10 @@ pub struct Room {
     pub stored_traces: Option<u8>,
 }
 
+fn default_jitter() -> f32 {
+    0.001
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClimateConfig {
@@ -58,4 +62,6 @@ pub struct ClimateConfig {
     pub wait_between_adjustments: Option<Duration>,
     #[serde(default)]
     pub stored_traces: Option<u8>,
+    #[serde(default = "default_jitter")]
+    pub jitter: f32,
 }

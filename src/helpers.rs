@@ -4,6 +4,7 @@ use std::{collections::HashMap, rc::Rc};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    automation::Trigger,
     entity_id::{EntityId, EntityMember, EntityType, HasEntityType},
     template::{Template, TemplateExpression},
     types::{ComparableNumber, HasSensors, InsertableIn},
@@ -62,6 +63,9 @@ impl Duration {
             seconds,
         }
     }
+    pub fn from_minutes(minutes: usize) -> Self {
+        Self::from_seconds(minutes * 60)
+    }
 }
 
 impl Mul<usize> for &Duration {
@@ -95,6 +99,8 @@ impl HasEntityType for DerivativeSensor {
 pub enum UnitOfMeasurement {
     #[serde(rename = "°C")]
     Celcius,
+    #[serde(rename = "°C/h")]
+    CelciusPerHour,
     #[serde(rename = "%")]
     Percent,
     Minutes,
@@ -147,6 +153,8 @@ pub struct TemplateSensor {
     pub unique_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub availability: Option<Template>,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub attributes: HashMap<Rc<str>, Template>,
 }
 
 impl TemplateSensor {
@@ -170,9 +178,26 @@ impl HasEntityType for TemplateSensor {
 }
 
 #[derive(Serialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub struct TemplateSensorHolder {
+pub struct TriggeredTemplateSensor {
     pub sensor: Vec<TemplateSensor>,
+    #[serde(skip_serializing_if = "HasSensors::is_empty")]
+    pub trigger: Vec<Trigger>,
+}
+
+impl TemplateSensor {
+    pub fn with_trigger(self, trigger: Trigger) -> TriggeredTemplateSensor {
+        TriggeredTemplateSensor {
+            sensor: vec![self],
+            trigger: vec![trigger],
+        }
+    }
+}
+
+impl TriggeredTemplateSensor {
+    pub fn with_trigger(mut self, trigger: Trigger) -> TriggeredTemplateSensor {
+        self.trigger.push(trigger);
+        self
+    }
 }
 
 #[derive(Serialize)]
@@ -181,10 +206,9 @@ pub enum Sensor {
     Derivative(DerivativeSensor),
 }
 
-impl HasSensors for Option<[TemplateSensorHolder; 1]> {
+impl HasSensors for TriggeredTemplateSensor {
     fn is_empty(&self) -> bool {
-        let Some(templates) = self else { return true };
-        templates.is_empty()
+        self.sensor.is_empty()
     }
 }
 
@@ -218,7 +242,26 @@ impl HasEntityType for InputNumber {
 impl InsertableIn<Helpers> for TemplateSensor {
     type Key = ();
     fn insert_into(self, _name: Self::Key, target: &mut Helpers) -> bool {
-        target.template.get_or_insert_default()[0].sensor.push(self);
+        TriggeredTemplateSensor {
+            sensor: vec![self],
+            trigger: Default::default(),
+        }
+        .insert_into(_name, target)
+    }
+}
+
+impl InsertableIn<Helpers> for TriggeredTemplateSensor {
+    type Key = ();
+    fn insert_into(mut self, _name: Self::Key, target: &mut Helpers) -> bool {
+        if let Some(no_trigger) = target
+            .template
+            .iter_mut()
+            .find(|elem| &elem.trigger[..] == &self.trigger[..])
+        {
+            no_trigger.sensor.append(&mut self.sensor)
+        } else {
+            target.template.push(self);
+        }
         true
     }
 }
@@ -251,7 +294,7 @@ pub struct Helpers {
     #[serde(skip_serializing_if = "HasSensors::is_empty")]
     pub sensor: Vec<Sensor>,
     #[serde(skip_serializing_if = "HasSensors::is_empty")]
-    pub template: Option<[TemplateSensorHolder; 1]>,
+    pub template: Vec<TriggeredTemplateSensor>,
     #[serde(skip_serializing_if = "HasSensors::is_empty")]
     pub input_number: HashMap<Rc<str>, InputNumber>,
     pub group: HashMap<Rc<str>, OldStyleGroup>,

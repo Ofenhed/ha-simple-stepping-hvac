@@ -13,7 +13,7 @@ use crate::{
     Package,
 };
 
-#[derive(Default)]
+#[derive(Default, PartialEq, Eq)]
 pub enum TimeInterval {
     At(u8),
     EveryNth(u8),
@@ -40,11 +40,11 @@ impl Display for TimeInterval {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, PartialEq, Eq)]
 #[serde(tag = "trigger", rename_all = "snake_case")]
 pub enum Trigger {
     State {
-        entity_id: EntityId,
+        entity_id: Vec<EntityId>,
     },
     TimePattern {
         #[serde(

@@ -1,8 +1,4 @@
-use std::{
-    collections::HashSet,
-    ops::{Deref as _, Rem as _},
-    rc::Rc,
-};
+use std::{collections::HashSet, ops::Deref as _, rc::Rc};
 
 use crate::{
     automation::{
@@ -32,6 +28,8 @@ pub enum TranslationError {
     #[error("Some kind of error here")]
     Something,
 }
+
+const FORCE_UPDATE_DUMMY_ATTRIBUTE: &'static str = "force update dummy";
 
 fn temperature_in_1_hour(
     temperature: EntityMember,
@@ -72,6 +70,7 @@ fn temperature_template_sensor(name: String, template: impl Into<Template>) -> T
         unit_of_measurement: Some(Celcius),
         unique_id: None,
         availability: None,
+        attributes: Default::default(),
     }
 }
 
@@ -87,6 +86,7 @@ impl Package {
         room_name: &str,
         room: &Room,
         temperature_offset: &EntityMember,
+        jitter: Rc<TemplateExpression>,
     ) -> RoomTemperatureSensors {
         let mut room_current_temperature_entities = Vec::with_capacity(room.radiators.len() + 1);
         let mut room_chosen_temperature_entities = Vec::with_capacity(room.radiators.len() + 1);
@@ -151,17 +151,6 @@ impl Package {
         )
         .unwrap();
         let mut current_temperature_template = Template::default();
-        let even_minute = {
-            current_temperature_template
-                .assign_new(TemplateExpression::now())
-                .member("minute")
-                .rem(TemplateExpression::literal(2))
-        };
-        let jitter = TemplateExpression::if_then_else(
-            even_minute,
-            TemplateExpression::literal(1),
-            TemplateExpression::literal(-1),
-        );
         let mut maybe_external_weight = None;
         if let Some((external_temperature, external_weight)) = externals {
             let weight = &*external_weight
@@ -173,14 +162,31 @@ impl Package {
             temperature_sum = &*temperature_sum
                 + (&*external_temperature.to_ha_call_named("external").to_float() * weight);
         }
-        temperature_sum = &*temperature_sum + (&*TemplateExpression::literal(0.00_01) * jitter);
-        current_temperature_template.expr(&*temperature_sum / divider);
+        current_temperature_template.expr(&*(&*temperature_sum / divider) + jitter);
         let mut current_temperature_average_sensor =
             temperature_template_sensor(entity_id.id.to_string(), current_temperature_template);
         current_temperature_average_sensor
             .set_availability_from(&room_current_temperature_entities[..]);
         let current_temperature_average = EntityMember::state(entity_id);
-        self.helpers.insert((), current_temperature_average_sensor);
+        current_temperature_average_sensor.attributes.insert(
+            FORCE_UPDATE_DUMMY_ATTRIBUTE.into(),
+            TemplateExpression::now().member("minute").into(),
+        );
+        self.helpers.insert(
+            (),
+            current_temperature_average_sensor
+                .with_trigger(Trigger::TimePattern {
+                    hours: TimeInterval::Any,
+                    minutes: TimeInterval::Any,
+                    seconds: TimeInterval::At(0),
+                })
+                .with_trigger(Trigger::State {
+                    entity_id: room_current_temperature_entities
+                        .iter()
+                        .map(|x| x.entity_id())
+                        .collect(),
+                }),
+        );
         let chosen_temperature = {
             let temperature_template: Rc<TemplateExpression> =
                 &*match &room_chosen_temperature_entities[..] {
@@ -319,6 +325,12 @@ impl TryFrom<&ClimateConfig> for Package {
         let Some([heat_sensitivity, cold_sensitivity]) = sensitivity.first_chunk() else {
             unreachable!()
         };
+        let jitter = {
+            let two = TemplateExpression::literal(2);
+            &*(&*TemplateExpression::literal(1)
+                - &*(&*TemplateExpression::now().member("minute") % two.clone()) * two)
+                * TemplateExpression::literal(config.jitter.to_string())
+        };
         for (room_name, room) in config.rooms.iter() {
             let never_triggered = Condition::Template {
                 value_template: TemplateExpression::this_automation_last_trigger()
@@ -329,7 +341,12 @@ impl TryFrom<&ClimateConfig> for Package {
                 chosen_temperature,
                 current_temperature_average: temperature_entity,
                 external_weight,
-            } = output.build(room_name, room, &radiator_temperature_offset);
+            } = output.build(
+                room_name,
+                room,
+                &radiator_temperature_offset,
+                jitter.clone(),
+            );
             internal_entities
                 .entities
                 .push(temperature_entity.entity_id());
@@ -378,6 +395,25 @@ impl TryFrom<&ClimateConfig> for Package {
                 unit_time: Some(UnitTime::Hours),
                 round: Some(2),
             };
+            let derivate_dummy_entity = {
+                let name = format!("{room_name} temperature change dummy");
+                let entity = output.new_entity_id(TemplateSensor::entity_type(), &name);
+                output.customize(entity.clone(), Customize::FriendlyName, name);
+                output.customize(entity.clone(), Customize::Hidden, true);
+                internal_entities.entities.push(entity.clone());
+                EntityMember::state(entity)
+            };
+            let mut derivate_dummy_sensor = temperature_template_sensor(
+                derivate_dummy_entity.entity_id().id.to_string(),
+                &*derivate_entity.to_ha_call().to_float() - jitter.clone(),
+            );
+            derivate_dummy_sensor.set_availability_from(&[derivate_entity.clone()]);
+            derivate_dummy_sensor.unit_of_measurement = Some(UnitOfMeasurement::CelciusPerHour);
+            derivate_dummy_sensor.device_class = None;
+            derivate_dummy_sensor.attributes.insert(
+                FORCE_UPDATE_DUMMY_ATTRIBUTE.into(),
+                TemplateExpression::now().member("minute").into(),
+            );
             let trend_entity = {
                 let name = format!("{room_name} temperature trend");
                 let entity = output.new_entity_id(DerivativeSensor::entity_type(), &name);
@@ -388,7 +424,7 @@ impl TryFrom<&ClimateConfig> for Package {
             };
             let trend_sensor = DerivativeSensor {
                 name: trend_entity.entity_id().id.to_string(),
-                source: derivate_entity.clone().static_entity_id(),
+                source: derivate_dummy_entity.clone().static_entity_id(),
                 time_window: room
                     .trend_spanning
                     .as_ref()
@@ -419,11 +455,12 @@ impl TryFrom<&ClimateConfig> for Package {
                     trend_entity.clone(),
                 ),
             );
-            prediction_sensor.set_availability_from(&[
+            let prediction_sources = [
                 temperature_entity.clone(),
                 derivate_entity.clone(),
                 trend_entity.clone(),
-            ]);
+            ];
+            prediction_sensor.set_availability_from(&prediction_sources);
             let chosen_temperature_value = chosen_temperature
                 .to_ha_call_named("chosen_temp")
                 .to_float();
@@ -440,6 +477,18 @@ impl TryFrom<&ClimateConfig> for Package {
 
             output.helpers.insert((), prediction_sensor);
             output.helpers.insert((), derivate_sensor);
+            output.helpers.insert(
+                (),
+                derivate_dummy_sensor
+                    .with_trigger(Trigger::TimePattern {
+                        hours: TimeInterval::Any,
+                        minutes: TimeInterval::Any,
+                        seconds: TimeInterval::At(0),
+                    })
+                    .with_trigger(Trigger::State {
+                        entity_id: vec![derivate_entity.entity_id()],
+                    }),
+            );
             output.helpers.insert((), trend_sensor);
             for radiator in &room.radiators {
                 let mut extra_run_conditions: Option<Condition> = None;
@@ -643,13 +692,17 @@ impl TryFrom<&ClimateConfig> for Package {
                                 TriggerHolder {
                                     id: Some(max_changed.clone()),
                                     trigger: Trigger::State {
-                                        entity_id: max_closing_valve_entity.state_entity().unwrap(),
+                                        entity_id: vec![max_closing_valve_entity
+                                            .state_entity()
+                                            .unwrap()],
                                     },
                                 },
                                 TriggerHolder {
                                     id: Some(min_changed.clone()),
                                     trigger: Trigger::State {
-                                        entity_id: min_closing_valve_entity.state_entity().unwrap(),
+                                        entity_id: vec![min_closing_valve_entity
+                                            .state_entity()
+                                            .unwrap()],
                                     },
                                 },
                             ],
@@ -895,13 +948,13 @@ impl TryFrom<&ClimateConfig> for Package {
                         }),
                         trigger: [
                             Trigger::State {
-                                entity_id: radiator.entity_id.clone().into(),
+                                entity_id: vec![radiator.entity_id.clone().into()],
                             },
                             Trigger::State {
-                                entity_id: temperature_entity
+                                entity_id: vec![temperature_entity
                                     .static_state_entity()
                                     .expect("Temperature entity is a state")
-                                    .into(),
+                                    .into()],
                             },
                             Trigger::TimePattern {
                                 hours: TimeInterval::Unset,
