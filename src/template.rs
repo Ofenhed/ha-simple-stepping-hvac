@@ -5,6 +5,7 @@ use crate::{
     types::{to_string_serialize, LinkedTree},
 };
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet, VecDeque},
     fmt::Write,
     ops::{Add, Deref, DerefMut, Div, Mul, Rem, Sub},
@@ -128,7 +129,7 @@ impl TemplateUnaryOp {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TemplateExpression {
     Op(Rc<TemplateExpression>, TemplateOp, Rc<TemplateExpression>),
-    Member(Rc<TemplateExpression>, &'static str),
+    Member(Rc<TemplateExpression>, Cow<'static, str>),
     IfThenElse {
         r#if: Rc<TemplateExpression>,
         then: Rc<TemplateExpression>,
@@ -137,7 +138,7 @@ pub enum TemplateExpression {
     Unary(TemplateUnaryOp, Rc<TemplateExpression>),
     Call(
         &'static str,
-        Rc<[(Option<&'static str>, Rc<TemplateExpression>)]>,
+        Rc<[(Option<Cow<'static, str>>, Rc<TemplateExpression>)]>,
     ),
     Pipe(Rc<TemplateExpression>, Rc<TemplateExpression>),
     Literal(Rc<str>),
@@ -512,7 +513,7 @@ impl Deref for TemplateVariable {
 }
 
 impl TemplateVariable {
-    pub fn member(self: &Self, name: &'static str) -> TemplateVariable {
+    pub fn member(self: &Self, name: Cow<'static, str>) -> TemplateVariable {
         TemplateVariable(self.0.clone().member(name))
     }
 }
@@ -562,7 +563,7 @@ impl Template {
     #[must_use]
     pub fn assign_new_namespace(
         &mut self,
-        expr: impl IntoIterator<Item = (&'static str, Rc<TemplateExpression>)>,
+        expr: impl IntoIterator<Item = (Cow<'static, str>, Rc<TemplateExpression>)>,
     ) -> TemplateVariable {
         let expr = expr.into_iter();
         let args: Vec<_> = expr.map(|(name, value)| (Some(name), value)).collect();
@@ -719,7 +720,7 @@ impl TemplateExpression {
     pub fn bool(value: bool) -> Rc<TemplateExpression> {
         Self::Literal(if value { "True" } else { "False" }.into()).into()
     }
-    pub fn member(self: &Rc<Self>, name: &'static str) -> Rc<TemplateExpression> {
+    pub fn member(self: &Rc<Self>, name: Cow<'static, str>) -> Rc<TemplateExpression> {
         Self::Member(self.clone(), name).into()
     }
     pub fn string(value: impl Into<Rc<str>>) -> Rc<TemplateExpression> {
@@ -826,7 +827,7 @@ impl TemplateExpression {
     }
     pub fn fun<I: Into<Rc<TemplateExpression>>>(
         fun: &'static str,
-        args: impl IntoIterator<Item = (Option<&'static str>, I)>,
+        args: impl IntoIterator<Item = (Option<Cow<'static, str>>, I)>,
     ) -> Rc<TemplateExpression> {
         TemplateExpression::Call(
             fun,
@@ -914,9 +915,9 @@ impl TemplateExpression {
         Self::fun(
             "timedelta",
             [
-                (Some("hours"), hours.into()),
-                (Some("minutes"), minutes.into()),
-                (Some("seconds"), seconds.into()),
+                (Some(Cow::Borrowed("hours")), hours.into()),
+                (Some(Cow::Borrowed("minutes")), minutes.into()),
+                (Some(Cow::Borrowed("seconds")), seconds.into()),
             ],
         )
     }

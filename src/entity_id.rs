@@ -42,8 +42,14 @@ impl EntityId {
             "states",
             [
                 (None, TemplateExpression::string(self.to_string())),
-                (Some("rounded"), TemplateExpression::bool(true)),
-                (Some("with_unit"), TemplateExpression::bool(true)),
+                (
+                    Some(Cow::Borrowed("rounded")),
+                    TemplateExpression::bool(true),
+                ),
+                (
+                    Some(Cow::Borrowed("with_unit")),
+                    TemplateExpression::bool(true),
+                ),
             ],
         )
         .mark_const_expr()
@@ -106,7 +112,10 @@ impl EntityMember {
                 "states",
                 [
                     (None, TemplateExpression::string(self.0.to_string())),
-                    (Some("rounded"), TemplateExpression::bool(false)),
+                    (
+                        Some(Cow::Borrowed("rounded")),
+                        TemplateExpression::bool(false),
+                    ),
                 ],
             )
             .mark_named_const_expr(self.0.id.clone()),
@@ -271,6 +280,7 @@ impl Package {
     pub fn new_entity_id(&self, entity_type: EntityType, name: &str) -> EntityId {
         let mut counter = 0;
         let mut known_entity_ids = self
+            .state
             .known_entity_ids
             .lock()
             .expect("We will not mess up this lock");
@@ -282,7 +292,7 @@ impl Package {
             };
             let entity_id = EntityId::external(
                 entity_type,
-                &format!("{}_{name}{ctr}", self.entity_id_prefix),
+                &format!("{}_{name}{ctr}", self.state.entity_id_prefix),
             );
             if known_entity_ids.insert(entity_id.clone()) {
                 return entity_id;

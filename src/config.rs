@@ -24,9 +24,7 @@ pub struct Room {
     #[serde(default)]
     pub valve_closing_automation: bool,
     #[serde(default)]
-    pub derivative_spanning: Option<Duration>,
-    #[serde(default)]
-    pub trend_spanning: Option<Duration>,
+    pub derivative_spannings: Option<Vec<Duration>>,
     //#[serde(default)]
     //pub acceptable_temperature_difference: Option<f32>,
     #[serde(default)]
@@ -52,12 +50,11 @@ pub struct ClimateConfig {
     pub default_min_closing_percent: Option<u8>,
     #[serde(default)]
     pub default_max_closing_percent: Option<u8>,
-    pub derivative_spanning: Duration,
+    pub derivative_spannings: Vec<Duration>,
     #[serde(default)]
     pub full_close_friction: bool,
     #[serde(default)]
     pub full_close_only_at_real_temperature: Option<bool>,
-    pub trend_spanning: Duration,
     pub backoff_after_heat: Duration,
     pub wait_between_adjustments: Option<Duration>,
     #[serde(default)]

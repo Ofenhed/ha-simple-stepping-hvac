@@ -99,8 +99,6 @@ impl HasEntityType for DerivativeSensor {
 pub enum UnitOfMeasurement {
     #[serde(rename = "°C")]
     Celcius,
-    #[serde(rename = "°C/h")]
-    CelciusPerHour,
     #[serde(rename = "%")]
     Percent,
     Minutes,

@@ -6,7 +6,12 @@ use std::{
 
 use serde::Serialize;
 
-use crate::{automation::Automation, entity_id::EntityId, helpers::Helpers};
+use crate::{
+    automation::Automation,
+    entity_id::EntityId,
+    helpers::{Helpers, OldStyleGroup},
+    template::TemplateExpression,
+};
 
 type CustomizeType = HashMap<EntityId, HashMap<Customize, serde_yaml::Value>>;
 
@@ -15,13 +20,71 @@ pub struct HomeAssistant {
     pub customize: CustomizeType,
 }
 
+pub struct PackageGroups {
+    pub internal_entities: OldStyleGroup,
+    pub global_configuration_entities: OldStyleGroup,
+    pub status_entities: OldStyleGroup,
+    pub individual_configuration_entities: OldStyleGroup,
+}
+
+impl Default for PackageGroups {
+    fn default() -> Self {
+        let internal_entities = OldStyleGroup {
+            name: "Radiator Temperature Internals".into(),
+            entities: Default::default(),
+        };
+        let global_configuration_entities = OldStyleGroup {
+            name: "Radiator Temperature Global Configuration".into(),
+            entities: Default::default(),
+        };
+        let status_entities = OldStyleGroup {
+            name: "Radiator Temperature Status".into(),
+            entities: Default::default(),
+        };
+        let individual_configuration_entities = OldStyleGroup {
+            name: "Radiators Temperature Configuration".into(),
+            entities: Default::default(),
+        };
+        Self {
+            internal_entities,
+            global_configuration_entities,
+            status_entities,
+            individual_configuration_entities,
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct PackageState {
+    pub entity_id_prefix: Rc<str>,
+    pub known_entity_ids: Mutex<HashSet<EntityId>>,
+    pub jitter: Option<Rc<TemplateExpression>>,
+    pub groups: PackageGroups,
+    iteration: usize,
+}
+
+impl Package {
+    pub fn next_iteration(&mut self) {
+        self.state.iteration += 1
+    }
+
+    pub fn iteration(&self) -> usize {
+        self.state.iteration
+    }
+
+    pub fn jitter(&self) -> Rc<TemplateExpression> {
+        self.state
+            .jitter
+            .clone()
+            .unwrap_or_else(|| TemplateExpression::literal(0))
+    }
+}
+
 #[derive(Serialize, Default)]
 pub struct Package {
     pub homeassistant: HomeAssistant,
     #[serde(skip)]
-    pub entity_id_prefix: Rc<str>,
-    #[serde(skip)]
-    pub known_entity_ids: Mutex<HashSet<EntityId>>,
+    pub state: PackageState,
     pub automation: Vec<Automation>,
     #[serde(flatten)]
     pub helpers: Helpers,
