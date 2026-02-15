@@ -835,11 +835,14 @@ impl TryFrom<&ClimateConfig> for Package {
                     let adjust_steps_abs = (&*comfortable_temperature_multiplier_abs.clone()
                         * template_closing_step.clone())
                     .mark_named_const_expr("adjust_steps_abs");
-                    let adjust_steps = TemplateExpression::if_then_else(
+                    let lit_one = TemplateExpression::literal(1);
+                    let adjust_steps_multiplier = TemplateExpression::if_then_else(
                         too_warm.clone(),
-                        adjust_steps_abs.clone(),
-                        adjust_steps_abs.clone().neg(),
+                        lit_one.clone(),
+                        TemplateExpression::literal(-1),
                     );
+                    let adjust_steps = &*adjust_steps_multiplier * (&*lit_one +
+                        adjust_steps_abs.clone()).log2();
                     let may_close = Condition::from_template(
                         (&*template_closing_percent + template_closing_step.clone())
                             .le(max_closing_valve_entity.to_ha_call().to_int())

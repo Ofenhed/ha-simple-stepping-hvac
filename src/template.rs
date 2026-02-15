@@ -70,6 +70,7 @@ pub enum TemplateUnaryOp {
     Neg,
     IsNone,
     IsNotNone,
+    Log2,
 }
 
 #[derive(Default, Clone)]
@@ -121,6 +122,11 @@ impl TemplateUnaryOp {
                 f.write_str("(-(")?;
                 expr.fmt_raw_template(f)?;
                 f.write_str("))")
+            }
+            Self::Log2 => {
+                f.write_str("log(")?;
+                expr.fmt_raw_template(f)?;
+                f.write_str(", 2)")
             }
         }
     }
@@ -397,7 +403,7 @@ impl Serialize for Template {
 }
 
 impl TemplateExpression {
-    fn fmt_raw_template(&self, f: &mut Formatter<'_, '_>) -> std::fmt::Result {
+    fn fmt_raw_template(&self, f: &mut Formatter<'_, '_>, atomize: bool) -> std::fmt::Result {
         match self {
             Self::Op(rc, template_op, rc1) => {
                 f.write_str("(")?;
@@ -787,6 +793,13 @@ impl TemplateExpression {
                     .map(|name| *name = format!("neg_{name}").into());
                 value.unary(TemplateUnaryOp::Neg)
             }
+        })
+    }
+    pub fn log2(self: Rc<Self>) -> Rc<TemplateExpression> {
+        self.raise_named_constexpr(|value, name| {
+            name.as_mut()
+                .map(|name| *name = format!("log2_{name}").into());
+            value.unary(TemplateUnaryOp::Log2)
         })
     }
     pub fn is_none(self: Rc<Self>) -> Rc<TemplateExpression> {
