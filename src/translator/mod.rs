@@ -386,11 +386,11 @@ impl TryFrom<&ClimateConfig> for Package {
             None
         };
         let sensitivity = [
-            ("heat", config.acceptable_temperature_difference),
-            ("cold", config.acceptable_temperature_difference),
+            ("heat", "mdi:thermometer-chevron-up", config.acceptable_temperature_difference),
+            ("cold", "mdi:thermometer-chevron-down", config.acceptable_temperature_difference),
         ]
         .into_iter()
-        .map(|(what, initial)| {
+        .map(|(what, icon, initial)| {
             let name = format!("Radiator temperature {what} sensitivity");
             let entity = output.new_entity_id(InputNumber::entity_type(), &name);
             let input = InputNumber {
@@ -399,7 +399,7 @@ impl TryFrom<&ClimateConfig> for Package {
                 min: ComparableNumber::Float(0.05),
                 max: 2.into(),
                 step: ComparableNumber::Float(0.05),
-                icon: Some("mdi:tape-measure".into()),
+                icon: icon.into(),
                 mode: InputNumberMode::Box,
             };
             output
