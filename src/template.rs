@@ -101,31 +101,55 @@ impl<'a> DerefMut for Formatter<'a, '_> {
 impl TemplateControl {}
 
 impl TemplateUnaryOp {
-    fn fmt_raw_template(&self, f: &mut Formatter, expr: &TemplateExpression) -> std::fmt::Result {
+    fn fmt_raw_template(&self, f: &mut Formatter, expr: &TemplateExpression, atomize: bool) -> std::fmt::Result {
         match self {
             Self::Not => {
-                f.write_str("(not ")?;
-                expr.fmt_raw_template(f)?;
-                f.write_char(')')
+                if atomize {
+                    f.write_char('(')?;
+                }
+                f.write_str("not ")?;
+                expr.fmt_raw_template(f, true)?;
+                if atomize {
+                    f.write_char(')')?;
+                }
+                Ok(())
             }
             Self::IsNone => {
-                f.write_char('(')?;
-                expr.fmt_raw_template(f)?;
-                f.write_str(" is none)")
+                if atomize {
+                    f.write_char('(')?;
+                }
+                expr.fmt_raw_template(f, true)?;
+                f.write_str(" is none")?;
+                if atomize {
+                    f.write_char(')')?;
+                }
+                Ok(())
             }
             Self::IsNotNone => {
-                f.write_char('(')?;
-                expr.fmt_raw_template(f)?;
-                f.write_str(" is not none)")
+                if atomize {
+                    f.write_char('(')?;
+                }
+                expr.fmt_raw_template(f, true)?;
+                f.write_str(" is not none")?;
+                if atomize {
+                    f.write_char(')')?;
+                }
+                Ok(())
             }
             Self::Neg => {
-                f.write_str("(-(")?;
-                expr.fmt_raw_template(f)?;
-                f.write_str("))")
+                if atomize {
+                    f.write_char('(')?;
+                }
+                f.write_char('-')?;
+                expr.fmt_raw_template(f, true)?;
+                if atomize {
+                    f.write_char(')')?;
+                }
+                Ok(())
             }
             Self::Log2 => {
                 f.write_str("log(")?;
-                expr.fmt_raw_template(f)?;
+                expr.fmt_raw_template(f, false)?;
                 f.write_str(", 2)")
             }
         }
@@ -166,11 +190,11 @@ impl TemplateControl {
                 f.write_str("set ")?;
                 f.write_str(value)?;
                 f.write_char('=')?;
-                expr.fmt_raw_template(f)?;
+                expr.fmt_raw_template(f, false)?;
             }
             Self::For(value, expr, body) => {
                 f.write_fmt(format_args!("for {value} in "))?;
-                expr.fmt_raw_template(f)?;
+                expr.fmt_raw_template(f, false)?;
                 f.write_str("\n%}")?;
                 Template::print_contents(body.iter().cloned(), f)?;
                 f.write_str("{%\n  endfor")?;
@@ -289,7 +313,7 @@ impl Template {
                 B::Optional(block) => print_block(&block, f),
                 B::Expr(expr) => {
                     f.write_str("{{ ")?;
-                    expr.fmt_raw_template(f)?;
+                    expr.fmt_raw_template(f, false)?;
                     f.write_str(" }}")
                 }
             }
@@ -406,11 +430,16 @@ impl TemplateExpression {
     fn fmt_raw_template(&self, f: &mut Formatter<'_, '_>, atomize: bool) -> std::fmt::Result {
         match self {
             Self::Op(rc, template_op, rc1) => {
-                f.write_str("(")?;
-                rc.fmt_raw_template(f)?;
+                if atomize {
+                    f.write_str("(")?;
+                }
+                rc.fmt_raw_template(f, true)?;
                 template_op.fmt_raw_template(f)?;
-                rc1.fmt_raw_template(f)?;
-                f.write_str(")")
+                rc1.fmt_raw_template(f, true)?;
+                if atomize {
+                    f.write_str(")")?;
+                }
+                Ok(())
             }
             Self::ConstExpr(expr) | Self::NamedConstExpr(_, expr) => f
                 .state
@@ -418,8 +447,8 @@ impl TemplateExpression {
                 .get(expr)
                 .unwrap_or(expr)
                 .clone()
-                .fmt_raw_template(f),
-            Self::Unary(op, rc) => op.fmt_raw_template(f, rc),
+                .fmt_raw_template(f, atomize),
+            Self::Unary(op, rc) => op.fmt_raw_template(f, rc, atomize),
             Self::Call(rc, rc1) => {
                 f.write_str(rc)?;
                 f.write_str("(")?;
@@ -434,30 +463,40 @@ impl TemplateExpression {
                         f.write_str(arg_name)?;
                         f.write_char('=')?;
                     }
-                    arg.fmt_raw_template(f)?;
+                    arg.fmt_raw_template(f, false)?;
                 }
                 f.write_str(")")
             }
             Self::Member(rc, name) => {
-                rc.fmt_raw_template(f)?;
+                rc.fmt_raw_template(f, true)?;
                 f.write_char('.')?;
                 f.write_str(name)
             }
             Self::Pipe(rc, rc1) => {
-                f.write_str("(")?;
-                rc.fmt_raw_template(f)?;
+                if atomize {
+                    f.write_str("(")?;
+                }
+                rc.fmt_raw_template(f, true)?;
                 f.write_str("|")?;
-                rc1.fmt_raw_template(f)?;
-                f.write_str(")")
+                rc1.fmt_raw_template(f, true)?;
+                if atomize {
+                    f.write_str(")")?;
+                }
+                Ok(())
             }
             Self::IfThenElse { r#if, then, r#else } => {
-                f.write_char('(')?;
-                then.fmt_raw_template(f)?;
+                if atomize {
+                    f.write_char('(')?;
+                }
+                then.fmt_raw_template(f, true)?;
                 f.write_str(" if ")?;
-                r#if.fmt_raw_template(f)?;
+                r#if.fmt_raw_template(f, true)?;
                 f.write_str(" else ")?;
-                r#else.fmt_raw_template(f)?;
-                f.write_char(')')
+                r#else.fmt_raw_template(f, true)?;
+                if atomize {
+                    f.write_char(')')?;
+                }
+                Ok(())
             }
             Self::Literal(rc) => f.write_str(rc),
             Self::String(rc) => f.write_fmt(format_args!("\"{}\"", rc)), // TODO: Escape?
@@ -501,7 +540,7 @@ impl TemplateExpression {
                 self.0.fmt_raw_template(&mut Formatter {
                     f,
                     state: &mut Default::default(),
-                })
+                }, false)
             }
         }
         Print(self).to_string().into()
@@ -854,10 +893,10 @@ impl TemplateExpression {
         Self::fun(fun, [(None, self)])
     }
     pub fn to_float(self: Rc<Self>) -> Rc<TemplateExpression> {
-        self.raise_named_constexpr(|this, _| this.call_on_self("float"))
+        self.raise_named_constexpr(|this, _| this.pipe_to(Self::literal("float")))
     }
     pub fn to_int(self: Rc<Self>) -> Rc<TemplateExpression> {
-        self.raise_named_constexpr(|this, _| this.call_on_self("int"))
+        self.raise_named_constexpr(|this, _| this.pipe_to(Self::literal("int")))
     }
     pub fn pipe_to(
         self: Rc<Self>,

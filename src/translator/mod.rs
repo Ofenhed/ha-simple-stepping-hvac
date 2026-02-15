@@ -842,7 +842,7 @@ impl TryFrom<&ClimateConfig> for Package {
                         TemplateExpression::literal(-1),
                     );
                     let adjust_steps = &*adjust_steps_multiplier * (&*lit_one +
-                        adjust_steps_abs.clone()).log2();
+                        adjust_steps_abs.clone()).log2().to_int();
                     let may_close = Condition::from_template(
                         (&*template_closing_percent + template_closing_step.clone())
                             .le(max_closing_valve_entity.to_ha_call().to_int())
