@@ -418,7 +418,7 @@ impl TryFrom<&ClimateConfig> for Package {
                 min: ComparableNumber::Float(0.05),
                 max: 2.into(),
                 step: ComparableNumber::Float(0.05),
-                icon: icon.into(),
+                icon: Some(icon.into()),
                 mode: InputNumberMode::Box,
             };
             output
