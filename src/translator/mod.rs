@@ -405,8 +405,16 @@ impl TryFrom<&ClimateConfig> for Package {
             None
         };
         let sensitivity = [
-            ("heat", "mdi:thermometer-chevron-up", config.acceptable_temperature_difference),
-            ("cold", "mdi:thermometer-chevron-down", config.acceptable_temperature_difference),
+            (
+                "heat",
+                "mdi:thermometer-chevron-up",
+                config.acceptable_temperature_difference,
+            ),
+            (
+                "cold",
+                "mdi:thermometer-chevron-down",
+                config.acceptable_temperature_difference,
+            ),
         ]
         .into_iter()
         .map(|(what, icon, initial)| {
@@ -841,8 +849,8 @@ impl TryFrom<&ClimateConfig> for Package {
                         lit_one.clone(),
                         TemplateExpression::literal(-1),
                     );
-                    let adjust_steps = &*adjust_steps_multiplier * (&*lit_one +
-                        adjust_steps_abs.clone()).log2().to_int();
+                    let adjust_steps = &*adjust_steps_multiplier
+                        * (&*lit_one + adjust_steps_abs.clone()).log2().to_int();
                     let may_close = Condition::from_template(
                         (&*template_closing_percent + template_closing_step.clone())
                             .le(max_closing_valve_entity.to_ha_call().to_int())

@@ -101,7 +101,12 @@ impl<'a> DerefMut for Formatter<'a, '_> {
 impl TemplateControl {}
 
 impl TemplateUnaryOp {
-    fn fmt_raw_template(&self, f: &mut Formatter, expr: &TemplateExpression, atomize: bool) -> std::fmt::Result {
+    fn fmt_raw_template(
+        &self,
+        f: &mut Formatter,
+        expr: &TemplateExpression,
+        atomize: bool,
+    ) -> std::fmt::Result {
         match self {
             Self::Not => {
                 if atomize {
@@ -537,10 +542,13 @@ impl TemplateExpression {
         struct Print<'a>(&'a TemplateExpression);
         impl std::fmt::Display for Print<'_> {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                self.0.fmt_raw_template(&mut Formatter {
-                    f,
-                    state: &mut Default::default(),
-                }, false)
+                self.0.fmt_raw_template(
+                    &mut Formatter {
+                        f,
+                        state: &mut Default::default(),
+                    },
+                    false,
+                )
             }
         }
         Print(self).to_string().into()
