@@ -13,7 +13,7 @@ use crate::{
     Package,
 };
 
-#[derive(Default, PartialEq, Eq)]
+#[derive(Default, PartialEq, Eq, Clone, Copy)]
 pub enum TimeInterval {
     At(u8),
     EveryNth(u8),
@@ -40,7 +40,7 @@ impl Display for TimeInterval {
     }
 }
 
-#[derive(Serialize, PartialEq, Eq)]
+#[derive(Serialize, PartialEq, Eq, Clone)]
 #[serde(tag = "trigger", rename_all = "snake_case")]
 pub enum Trigger {
     State {
@@ -63,12 +63,17 @@ pub enum Trigger {
         )]
         seconds: TimeInterval,
     },
+    Template {
+        value_template: Template,
+    },
 }
 
 #[derive(Serialize)]
 pub struct TriggerHolder {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<Rc<str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub r#for: Option<Duration>,
     #[serde(flatten)]
     pub trigger: Trigger,
 }
@@ -78,6 +83,7 @@ impl From<Trigger> for TriggerHolder {
         Self {
             id: None,
             trigger: value,
+            r#for: None,
         }
     }
 }
@@ -174,6 +180,13 @@ pub enum Condition {
     },
 }
 
+impl Trigger {
+    pub fn from_template(template: impl Into<Template>) -> Self {
+        Self::Template {
+            value_template: template.into(),
+        }
+    }
+}
 impl Condition {
     pub fn comment(text: impl Into<Rc<str>>) -> Self {
         Self::Trigger {
@@ -181,8 +194,8 @@ impl Condition {
             enabled: false,
         }
     }
-    pub fn from_template(template: impl Into<Template>) -> Condition {
-        Condition::Template {
+    pub fn from_template(template: impl Into<Template>) -> Self {
+        Self::Template {
             value_template: template.into(),
         }
     }
@@ -405,6 +418,16 @@ pub enum AutomationIdentifier {
     Id(String),
     #[serde(untagged)]
     Both { alias: String, id: String },
+}
+
+impl AutomationIdentifier {
+    pub fn entity_id(&self) -> Option<EntityId> {
+        match self {
+            Self::Alias(_) => None,
+            Self::Id(id) => Some(id.as_str()),
+            Self::Both { id, .. } => Some(id.as_str()),
+        }.map(|x| EntityId::external(EntityType::Automation, x))
+    }
 }
 
 impl Package {

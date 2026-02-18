@@ -13,7 +13,7 @@ use std::{
     sync::Mutex,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum TemplateOp {
     Add,
     Sub,
@@ -64,7 +64,7 @@ impl TemplateOp {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum TemplateUnaryOp {
     Not,
     Neg,
@@ -161,7 +161,7 @@ impl TemplateUnaryOp {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub enum TemplateExpression {
     Op(Rc<TemplateExpression>, TemplateOp, Rc<TemplateExpression>),
     Member(Rc<TemplateExpression>, Cow<'static, str>),
@@ -431,6 +431,14 @@ impl Serialize for Template {
     }
 }
 
+impl PartialEq<Self> for Template {
+    fn eq(&self, other: &Self) -> bool {
+        self.content == other.content
+    }
+}
+
+impl Eq for Template {}
+
 impl TemplateExpression {
     fn fmt_raw_template(&self, f: &mut Formatter<'_, '_>, atomize: bool) -> std::fmt::Result {
         match self {
@@ -506,6 +514,23 @@ impl TemplateExpression {
             Self::Literal(rc) => f.write_str(rc),
             Self::String(rc) => f.write_fmt(format_args!("\"{}\"", rc)), // TODO: Escape?
                                                                          // Seems like overkill.
+        }
+    }
+    pub fn clone_anon(self: &Rc<Self>) -> Rc<Self> {
+        match &**self {
+            Self::Op(rc, op, rc1) =>
+                Self::Op(rc.clone_anon(), *op, rc1.clone_anon()).into(),
+            Self::Pipe(rc, rc1) => Self::Pipe(rc.clone_anon(), rc1.clone_anon()).into(),
+            Self::Member(rc, name) =>
+              Self::Member(rc.clone_anon(), name.to_owned()).into(),
+            Self::Unary(op, rc) => Self::Unary(*op, rc.clone_anon()).into(),
+            Self::ConstExpr(rc)
+            | Self::NamedConstExpr(_, rc) => Self::ConstExpr(rc.clone_anon()).into(),
+            Self::Call(f, rc) =>
+                Self::Call(f, rc.iter().map(|(name, expr)| (name.to_owned(), expr.clone_anon())).collect()).into(),
+            Self::IfThenElse { r#if, then, r#else } =>
+                Self::IfThenElse { r#if: r#if.clone_anon(), then: then.clone_anon(), r#else: r#else.clone_anon() }.into(),
+            Self::Literal(_) | Self::String(_) => self.clone(),
         }
     }
     pub fn iter(&self) -> impl Iterator<Item = TemplateBlock> {
@@ -903,18 +928,12 @@ impl TemplateExpression {
     pub fn to_float(self: Rc<Self>) -> Rc<TemplateExpression> {
         let new_op_name = "float";
         let new_op = Self::literal(new_op_name);
-        match &*self {
-                Self::Pipe(val, piped_to) if *piped_to == Self::literal("int") || *piped_to == Self::literal("float") => val.clone(),
-                _ => self,
-        }.pipe_to(new_op.clone())
+        self.raise_named_constexpr(|this, _| this.pipe_to(new_op.clone()))
     }
     pub fn to_int(self: Rc<Self>) -> Rc<TemplateExpression> {
         let new_op_name = "int";
         let new_op = Self::literal(new_op_name);
-        match &*self {
-                Self::Pipe(val, piped_to) if *piped_to == Self::literal("int") || *piped_to == Self::literal("float") => val.clone(),
-                _ => self,
-        }.pipe_to(new_op.clone())
+        self.raise_named_constexpr(|this, _| this.pipe_to(new_op.clone()))
     }
     pub fn pipe_to(
         self: Rc<Self>,

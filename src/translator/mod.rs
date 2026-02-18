@@ -209,13 +209,14 @@ impl Package {
         if let Some((external_temperature, external_influence)) = externals {
             let only_external = TemplateExpression::literal(100);
             let weight = external_influence
-                .to_ha_call_named("external_influence");
-            let ext_mul = (&*weight.clone().to_float()
+                .to_ha_call_named("external_influence")
+                .to_int();
+            let ext_mul = (&*weight.clone()
                 / only_external.clone()).mark_named_const_expr("external_influence_percent");
             let rad_mul = &*TemplateExpression::literal(1.0)-ext_mul.clone();
             maybe_external_influence = Some(external_influence);
             current_temperature = TemplateExpression::if_then_else(
-                TemplateExpression::eq(weight.to_int(), only_external.clone()),
+                TemplateExpression::eq(weight, only_external.clone()),
                 external_temperature.to_ha_call_named("external").to_float(),
                 &*(&*current_temperature * rad_mul)
                 + &*external_temperature.to_ha_call_named("external").to_float() * ext_mul);
@@ -673,6 +674,10 @@ impl TryFrom<&ClimateConfig> for Package {
                 .mark_named_const_expr("comfortable_temp_multiplier")
                 .to_int();
                 if room.valve_closing_automation {
+                    let automation_name = output.new_automation_identifier(&format!(
+                            "Automatic minimum valve opening for {}",
+                            radiator.entity_id.assumed_friendly_name()
+                    ));
                     let min_closing_valve_entity = {
                         let name = format!(
                             "{} min closing valve",
@@ -741,7 +746,7 @@ impl TryFrom<&ClimateConfig> for Package {
                         output.helpers.insert(entity.clone(), input);
                         EntityMember::state(entity)
                     };
-                    let script_run_interval = {
+                    let (script_run_interval, script_run_interval_trigger) = {
                         let name = format!(
                             "{} adjustment interval",
                             radiator.entity_id.assumed_friendly_name()
@@ -780,15 +785,15 @@ impl TryFrom<&ClimateConfig> for Package {
                         let time = add_automation_entity(EntityMember::state(entity))
                             .to_ha_call()
                             .to_float();
-                        let sixty = TemplateExpression::literal(60);
-                        let hours = (&*time / sixty.clone()).to_int();
-                        let minutes = (&*time % sixty.clone()).to_int();
-                        let seconds = (&*(&*time * sixty.clone()) % sixty).to_int();
-                        Condition::from_template(
+                        let cond = Condition::from_template(
                             (&*TemplateExpression::now()
-                                - TemplateExpression::this_automation_last_trigger())
-                            .gt(TemplateExpression::timedelta(hours, minutes, seconds)),
-                        )
+                                - TemplateExpression::this_automation_last_trigger()).member("seconds".into())
+                            .gt(time.clone()),
+                        );
+                        let trigger = Trigger::from_template(
+                            (&*TemplateExpression::now() - (EntityMember(automation_name.entity_id().unwrap(), "last_triggered".into()).to_ha_call())).member("seconds".into()).gt(time)
+                        );
+                        (cond, trigger)
                     };
 
                     let invalid_closing_values_automation = {
@@ -803,6 +808,7 @@ impl TryFrom<&ClimateConfig> for Package {
                             trigger: vec![
                                 TriggerHolder {
                                     id: Some(max_changed.clone()),
+                                    r#for: None,
                                     trigger: Trigger::State {
                                         entity_id: vec![max_closing_valve_entity
                                             .state_entity()
@@ -811,6 +817,7 @@ impl TryFrom<&ClimateConfig> for Package {
                                 },
                                 TriggerHolder {
                                     id: Some(min_changed.clone()),
+                                    r#for: None,
                                     trigger: Trigger::State {
                                         entity_id: vec![min_closing_valve_entity
                                             .state_entity()
@@ -1051,10 +1058,7 @@ impl TryFrom<&ClimateConfig> for Package {
                         },
                     ));
                     let automation = Automation {
-                        name: output.new_automation_identifier(&format!(
-                            "Automatic minimum valve opening for {}",
-                            radiator.entity_id.assumed_friendly_name()
-                        )),
+                        name: automation_name,
                         trace: Some(TraceOptions {
                             stored_traces: radiator
                                 .stored_traces
@@ -1072,16 +1076,10 @@ impl TryFrom<&ClimateConfig> for Package {
                                     .expect("Temperature entity is a state")
                                     .into()],
                             },
-                            Trigger::TimePattern {
-                                hours: TimeInterval::Unset,
-                                minutes: TimeInterval::EveryNth(5),
-                                seconds: TimeInterval::At(
-                                    (output.iteration().overflowing_mul(7).0 % 60) as u8,
-                                ),
-                            },
                         ]
                         .into_iter()
                         .map(Into::into)
+                        .chain([TriggerHolder { id: None, r#for: None, trigger: script_run_interval_trigger }])
                         .collect(),
                         condition: conditions,
                         actions: vec![actions.into()],
