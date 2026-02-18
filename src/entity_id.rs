@@ -30,6 +30,16 @@ pub struct EntityId {
 }
 
 impl EntityId {
+    pub fn attribute(self, attr: impl Into<Rc<str>>) -> EntityMember {
+        EntityMember(self, EntityMemberType::from(attr))
+    }
+
+    pub fn state(self) -> EntityMember {
+        EntityMember(self, EntityMemberType::State)
+    }
+}
+
+impl EntityId {
     pub fn external(r#type: EntityType, id: &str) -> Self {
         Self {
             r#type,
@@ -151,10 +161,6 @@ impl EntityMember {
                     .mark_const_expr()
             }
         }
-    }
-
-    pub fn state(entity: EntityId) -> Self {
-        EntityMember(entity, EntityMemberType::State)
     }
 
     pub fn state_entity(&self) -> Option<EntityId> {
