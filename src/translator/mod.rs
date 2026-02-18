@@ -198,7 +198,7 @@ impl Package {
                 .iter()
                 .map(|x| {
                     EntityMember(x.entity_id.clone(), "current_temperature".into())
-                        .to_ha_call()
+                        .to_ha_call_named("current_temperature")
                         .to_float()
                 })
                 .collect::<Vec<_>>(),
@@ -653,11 +653,11 @@ impl TryFrom<&ClimateConfig> for Package {
                     );
                 let comfortable_temperature_multiplier_abs = {
                     let chosen_temperature = add_automation_entity(chosen_temperature.clone())
-                        .to_ha_call()
+                        .to_ha_call_named("chosen_temperature")
                         .to_float();
                     let predicted_temperature_entity =
                         add_automation_entity(predicted_temperature_entity.clone())
-                            .to_ha_call()
+                            .to_ha_call_named("predicted_temperature")
                             .to_float();
                     TemplateExpression::if_then_else(
                         too_warm.clone(),
@@ -783,7 +783,7 @@ impl TryFrom<&ClimateConfig> for Package {
                         );
                         output.helpers.insert(entity.clone(), input);
                         let time = add_automation_entity(EntityMember::state(entity))
-                            .to_ha_call()
+                            .to_ha_call_named("radiator_update_interval")
                             .to_float();
                         let cond = Condition::from_template(
                             (&*TemplateExpression::now()
@@ -791,7 +791,7 @@ impl TryFrom<&ClimateConfig> for Package {
                             .gt(time.clone()),
                         );
                         let trigger = Trigger::from_template(
-                            (&*TemplateExpression::now() - (EntityMember(automation_name.entity_id().unwrap(), "last_triggered".into()).to_ha_call())).member("seconds".into()).gt(time)
+                            (&*TemplateExpression::now() - (EntityMember(automation_name.entity_id().unwrap(), "last_triggered".into()).to_ha_call_named("last_triggered"))).member("seconds".into()).gt(time)
                         );
                         (cond, trigger)
                     };
@@ -836,7 +836,7 @@ impl TryFrom<&ClimateConfig> for Package {
                                     }],
                                     sequence: vec![Service::SetInputNumberValue {
                                         data: Service::template_data(
-                                            max_closing_valve_entity.to_ha_call().to_int(),
+                                            max_closing_valve_entity.to_ha_call_named("max_closing_valve").to_int(),
                                         ),
                                         target: min_closing_valve_entity
                                             .state_entity()
@@ -852,7 +852,7 @@ impl TryFrom<&ClimateConfig> for Package {
                                     }],
                                     sequence: vec![Service::SetInputNumberValue {
                                         data: Service::template_data(
-                                            min_closing_valve_entity.to_ha_call().to_int(),
+                                            min_closing_valve_entity.to_ha_call_named("min_closing_valve").to_int(),
                                         ),
                                         target: max_closing_valve_entity
                                             .state_entity()
@@ -882,12 +882,12 @@ impl TryFrom<&ClimateConfig> for Package {
                         * (&*lit_one + adjust_steps_abs.clone()).log2().to_int();
                     let may_close = Condition::from_template(
                         (&*template_closing_percent + template_closing_step.clone())
-                            .le(max_closing_valve_entity.to_ha_call().to_int())
+                            .le(max_closing_valve_entity.to_ha_call_named("max_closing_valve_entity").to_int())
                             .mark_named_const_expr("may_close"),
                     );
                     let may_open = Condition::from_template(
                         (&*template_closing_percent - template_closing_step.clone())
-                            .ge(min_closing_valve_entity.to_ha_call().to_int())
+                            .ge(min_closing_valve_entity.to_ha_call_named("min_closing_valve").to_int())
                             .mark_named_const_expr("may_open"),
                     );
                     let should_change = Condition::from_template(
