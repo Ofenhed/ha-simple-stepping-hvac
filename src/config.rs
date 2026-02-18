@@ -21,6 +21,8 @@ pub struct RadiatorConfig {
 pub struct DerivativeOptions {
     #[serde(default)]
     pub multiplier: Option<f32>,
+    #[serde(default)]
+    pub loss: Option<f32>,
     #[serde(flatten)]
     pub duration: Duration,
 }
@@ -34,6 +36,8 @@ pub struct Room {
     pub valve_closing_automation: bool,
     #[serde(default)]
     pub derivative_spannings: Option<Vec<DerivativeOptions>>,
+    #[serde(default)]
+    pub derivative_iterations: Option<u8>,
     #[serde(default)]
     pub full_close_friction: Option<bool>,
     #[serde(default)]
@@ -58,6 +62,8 @@ pub struct ClimateConfig {
     #[serde(default)]
     pub default_max_closing_percent: Option<u8>,
     pub derivative_spannings: Vec<DerivativeOptions>,
+    #[serde(default)]
+    pub derivative_iterations: Option<u8>,
     #[serde(default)]
     pub full_close_friction: bool,
     #[serde(default)]

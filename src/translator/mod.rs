@@ -31,26 +31,36 @@ pub enum TranslationError {
 
 const FORCE_UPDATE_DUMMY_ATTRIBUTE: &'static str = "force update dummy";
 
+#[derive(Clone, PartialEq)]
+struct TemperatureDerivate {
+    entity: EntityMember,
+    multiplier: Option<f32>,
+    loss: Option<f32>,
+}
+
 fn temperature_in_1_hour(
     temperature: EntityMember,
-    derivates: &[(EntityMember, Option<f32>)],
+    iterations_count: Option<u8>,
+    derivates: &[TemperatureDerivate],
 ) -> Template {
     let mut template = Template::default();
     let members: Box<[_]> = derivates
         .iter()
         .enumerate()
-        .map(|(idx, (member, multiplier))| {
+        .map(|(idx, d)| {
             (
                 Cow::Owned(format!("d{idx}")),
-                member.to_ha_call().to_float(),
-                *multiplier,
+                d.entity.to_ha_call().to_float(),
+                d.multiplier,
+                d.loss,
             )
         })
         .collect();
 
-    let namespace_members: Vec<(Cow<'static, _>, _, _)> = [(
+    let namespace_members: Vec<(Cow<'static, _>, _, _, _)> = [(
         Cow::Borrowed("t"),
         temperature.to_ha_call().to_float(),
+        None,
         None,
     )]
     .into_iter()
@@ -59,30 +69,39 @@ fn temperature_in_1_hour(
     let namespace = template.assign_new_namespace(
         namespace_members
             .iter()
-            .map(|(name, template, _mul)| (name.clone(), template.clone())),
+            .map(|(name, template, _mul, _loss)| (name.clone(), template.clone())),
     );
+    let iterations_count = iterations_count.unwrap_or(12);
+    let iterations = TemplateExpression::literal(iterations_count);
     let variables: Vec<_> = namespace_members
         .into_iter()
-        .map(|(name, _, multiplier)| {
+        .map(|(name, _, multiplier, loss)| {
             (
                 Rc::from(namespace.member(name)),
                 multiplier.map(TemplateExpression::literal),
+                loss.map(|x| (1.0-(x/f32::from(iterations_count)).max(0.0).min(1.0))).map(TemplateExpression::literal),
             )
         })
         .collect();
-    let iterations = TemplateExpression::literal(12);
     template.for_each(
         TemplateExpression::range(TemplateExpression::literal(0), iterations.clone()),
         |template, _var| {
             for window in variables.windows(2) {
-                let [(target, _), (derivate, multiplier)] = window else {
+                let [(target, _, loss), (derivate, multiplier, _)] = window else {
                     unreachable!()
                 };
                 let mut change = &****derivate / iterations.clone();
                 if let Some(multiplier) = multiplier {
                     change = &*change * multiplier.clone();
                 }
-                template.assign(target, &****target + change);
+                let mut new_value = &****target + &*change;
+                if let Some(loss) = loss {
+                     new_value = &*new_value * loss.clone();
+                }
+                template.assign(target, new_value);
+            }
+            if let Some((target, _, Some(loss))) = variables.last() {
+                template.assign(target, &****target * loss.clone());
             }
         },
     );
@@ -519,7 +538,7 @@ impl TryFrom<&ClimateConfig> for Package {
                             derivate.duration.clone(),
                         );
                         last_sensor = new.clone();
-                        (new, derivate.multiplier)
+                        TemperatureDerivate { entity: new, multiplier: derivate.multiplier, loss: derivate.loss }
                     })
                     .collect()
             };
@@ -544,11 +563,11 @@ impl TryFrom<&ClimateConfig> for Package {
             };
             let mut prediction_sensor = temperature_template_sensor(
                 predicted_temperature_entity.entity_id().id.to_string(),
-                temperature_in_1_hour(temperature_entity.clone(), &derivates_entities),
+                temperature_in_1_hour(temperature_entity.clone(), room.derivative_iterations.or(config.derivative_iterations), &derivates_entities),
             );
             let prediction_sources: Box<[_]> = [temperature_entity.clone()]
                 .into_iter()
-                .chain(derivates_entities.iter().map(|(entity, _)| entity.clone()))
+                .chain(derivates_entities.iter().map(|de| de.entity.clone()))
                 .collect();
             prediction_sensor.set_availability_from(&prediction_sources);
             let chosen_temperature_value = chosen_temperature
@@ -968,7 +987,7 @@ impl TryFrom<&ClimateConfig> for Package {
                             msg.expr(temperature_entity.entity_id().to_ha_call_pretty());
                             msg.text(", dt=(");
                             for derivate in &derivates_entities {
-                                msg.expr(derivate.0.entity_id().to_ha_call_pretty());
+                                msg.expr(derivate.entity.entity_id().to_ha_call_pretty());
                                 msg.text(", ");
                             }
                             msg.text("), tt=");
