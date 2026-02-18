@@ -113,7 +113,7 @@ fn temperature_template_sensor(name: String, template: impl Into<Template>) -> T
 struct RoomTemperatureSensors {
     chosen_temperature: EntityMember,
     current_temperature_average: EntityMember,
-    external_weight: Option<EntityMember>,
+    external_influence: Option<EntityMember>,
 }
 
 impl Package {
@@ -130,14 +130,14 @@ impl Package {
             let external_temperature =
                 EntityMember(external_sensor.clone(), EntityMemberType::State);
             room_current_temperature_entities.push(external_temperature.clone());
-            let name = format!("{room_name} external temperature weight",);
+            let name = format!("{room_name} external temperature influence",);
             let entity = self.new_entity_id(InputNumber::entity_type(), &name);
             let input = InputNumber {
                 name: Some(name.into()),
                 unit_of_measurement: UnitOfMeasurement::Percent,
                 min: 0.into(),
-                max: 1000.into(),
-                step: 5.into(),
+                max: 100.into(),
+                step: 1.into(),
                 icon: Some("mdi:scale-unbalanced".into()),
                 mode: InputNumberMode::Box,
             };
@@ -174,8 +174,7 @@ impl Package {
             );
             entity
         };
-        let mut divider = TemplateExpression::literal(room.radiators.len());
-        let mut temperature_sum = TemplateExpression::sum(
+        let mut current_temperature = TemplateExpression::average(
             room.radiators
                 .iter()
                 .map(|x| {
@@ -187,18 +186,23 @@ impl Package {
         )
         .unwrap();
         let mut current_temperature_template = Template::default();
-        let mut maybe_external_weight = None;
-        if let Some((external_temperature, external_weight)) = externals {
-            let weight = &*external_weight
-                .to_ha_call_named("external_weight")
-                .to_float()
-                / TemplateExpression::literal(100);
-            maybe_external_weight = Some(external_weight);
-            divider = &*divider + weight.clone();
-            temperature_sum = &*temperature_sum
-                + (&*external_temperature.to_ha_call_named("external").to_float() * weight);
+        let mut maybe_external_influence = None;
+        if let Some((external_temperature, external_influence)) = externals {
+            let only_external = TemplateExpression::literal(100);
+            let weight = external_influence
+                .to_ha_call_named("external_influence")
+                .to_int();
+            let ext_mul = (&*weight.clone().to_float()
+                / only_external.clone()).mark_named_const_expr("external_influence_percent");
+            let rad_mul = &*TemplateExpression::literal(1.0)-ext_mul.clone();
+            maybe_external_influence = Some(external_influence);
+            current_temperature = TemplateExpression::if_then_else(
+                TemplateExpression::eq(weight, only_external.clone()),
+                external_temperature.to_ha_call_named("external").to_float(),
+                &*(&*current_temperature * rad_mul)
+                + &*external_temperature.to_ha_call_named("external").to_float() * ext_mul);
         }
-        current_temperature_template.expr(&*(&*temperature_sum / divider) + jitter);
+        current_temperature_template.expr(&*current_temperature + jitter);
         let mut current_temperature_average_sensor =
             temperature_template_sensor(entity_id.id.to_string(), current_temperature_template);
         current_temperature_average_sensor
@@ -254,7 +258,7 @@ impl Package {
         RoomTemperatureSensors {
             chosen_temperature,
             current_temperature_average,
-            external_weight: maybe_external_weight,
+            external_influence: maybe_external_influence,
         }
     }
 
@@ -457,7 +461,7 @@ impl TryFrom<&ClimateConfig> for Package {
             let RoomTemperatureSensors {
                 chosen_temperature,
                 current_temperature_average: temperature_entity,
-                external_weight,
+                external_influence,
             } = output.build(
                 room_name,
                 room,
@@ -470,13 +474,13 @@ impl TryFrom<&ClimateConfig> for Package {
                 .internal_entities
                 .entities
                 .push(temperature_entity.entity_id());
-            if let Some(external_weight) = external_weight {
+            if let Some(external_influence) = external_influence {
                 output
                     .state
                     .groups
                     .individual_configuration_entities
                     .entities
-                    .push(external_weight.entity_id());
+                    .push(external_influence.entity_id());
             }
             {
                 let name = format!("{room_name} current temperature");

@@ -901,10 +901,16 @@ impl TemplateExpression {
         Self::fun(fun, [(None, self)])
     }
     pub fn to_float(self: Rc<Self>) -> Rc<TemplateExpression> {
-        self.raise_named_constexpr(|this, _| this.pipe_to(Self::literal("float")))
+            match &*self {
+                Self::Pipe(val, piped_to) if *piped_to == Self::literal("int") || *piped_to == Self::literal("float") => val.clone(),
+                _ => self,
+            }.pipe_to(Self::literal("float"))
     }
     pub fn to_int(self: Rc<Self>) -> Rc<TemplateExpression> {
-        self.raise_named_constexpr(|this, _| this.pipe_to(Self::literal("int")))
+        match &*self {
+                Self::Pipe(val, piped_to) if *piped_to == Self::literal("int") || *piped_to == Self::literal("float") => val.clone(),
+                _ => self,
+            }.pipe_to(Self::literal("int"))
     }
     pub fn pipe_to(
         self: Rc<Self>,
@@ -957,6 +963,16 @@ impl TemplateExpression {
         data: impl IntoIterator<Item = I>,
     ) -> Option<Rc<TemplateExpression>> {
         Self::fold(data, |v1, v2| &*v1 + v2)
+    }
+    pub fn average<I: Into<Rc<TemplateExpression>>>(
+        data: impl IntoIterator<Item = I>,
+    ) -> Option<Rc<TemplateExpression>> {
+        let mut count = 1;
+        let output = Self::fold(data, |v1, v2| {
+            count += 1;
+            &*v1 + v2
+        });
+        output.map(|v| &*v / Self::literal(count))
     }
     pub fn this_automation_last_trigger() -> Rc<TemplateExpression> {
         Self::literal("this.attributes.last_triggered")
@@ -1020,26 +1036,6 @@ impl TemplateExpression {
                 "max",
                 values.map(|x| (None, x.into())).collect::<Vec<_>>(),
             ))
-        }
-    }
-
-    pub fn average(
-        values: impl Into<Rc<[Rc<TemplateExpression>]>>,
-    ) -> Option<Rc<TemplateExpression>> {
-        let values = values.into();
-        let count = values.len();
-        let mut sum: Option<Rc<Self>> = None;
-        for value in &values[..] {
-            sum = if let Some(old) = sum {
-                Some(&*old + value.clone())
-            } else {
-                Some(value.clone())
-            };
-        }
-        if let Some(sum) = sum {
-            Some(&*sum / Self::literal(count))
-        } else {
-            None
         }
     }
 }
