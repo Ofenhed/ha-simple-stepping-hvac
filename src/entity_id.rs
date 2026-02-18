@@ -118,7 +118,7 @@ impl EntityMember {
                     ),
                 ],
             )
-            .mark_named_const_expr(self.0.id.clone()),
+            .mark_const_expr(),
             EntityMemberType::Attribute(cow) => TemplateExpression::fun(
                 "state_attr",
                 [
@@ -126,7 +126,7 @@ impl EntityMember {
                     (None, TemplateExpression::string(cow.clone())),
                 ],
             )
-            .mark_named_const_expr(format!("{}_{}", self.0.id, cow)),
+            .mark_const_expr(),
         }
     }
 
