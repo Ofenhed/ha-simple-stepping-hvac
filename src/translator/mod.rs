@@ -190,14 +190,13 @@ impl Package {
         if let Some((external_temperature, external_influence)) = externals {
             let only_external = TemplateExpression::literal(100);
             let weight = external_influence
-                .to_ha_call_named("external_influence")
-                .to_int();
+                .to_ha_call_named("external_influence");
             let ext_mul = (&*weight.clone().to_float()
                 / only_external.clone()).mark_named_const_expr("external_influence_percent");
             let rad_mul = &*TemplateExpression::literal(1.0)-ext_mul.clone();
             maybe_external_influence = Some(external_influence);
             current_temperature = TemplateExpression::if_then_else(
-                TemplateExpression::eq(weight, only_external.clone()),
+                TemplateExpression::eq(weight.to_int(), only_external.clone()),
                 external_temperature.to_ha_call_named("external").to_float(),
                 &*(&*current_temperature * rad_mul)
                 + &*external_temperature.to_ha_call_named("external").to_float() * ext_mul);

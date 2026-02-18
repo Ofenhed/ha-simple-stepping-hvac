@@ -901,16 +901,20 @@ impl TemplateExpression {
         Self::fun(fun, [(None, self)])
     }
     pub fn to_float(self: Rc<Self>) -> Rc<TemplateExpression> {
-            match &*self {
-                Self::Pipe(val, piped_to) if *piped_to == Self::literal("int") || *piped_to == Self::literal("float") => val.clone(),
-                _ => self,
-            }.pipe_to(Self::literal("float"))
-    }
-    pub fn to_int(self: Rc<Self>) -> Rc<TemplateExpression> {
+        let new_op_name = "float";
+        let new_op = Self::literal(new_op_name);
         match &*self {
                 Self::Pipe(val, piped_to) if *piped_to == Self::literal("int") || *piped_to == Self::literal("float") => val.clone(),
                 _ => self,
-            }.pipe_to(Self::literal("int"))
+        }.pipe_to(new_op.clone())
+    }
+    pub fn to_int(self: Rc<Self>) -> Rc<TemplateExpression> {
+        let new_op_name = "int";
+        let new_op = Self::literal(new_op_name);
+        match &*self {
+                Self::Pipe(val, piped_to) if *piped_to == Self::literal("int") || *piped_to == Self::literal("float") => val.clone(),
+                _ => self,
+        }.pipe_to(new_op.clone())
     }
     pub fn pipe_to(
         self: Rc<Self>,
