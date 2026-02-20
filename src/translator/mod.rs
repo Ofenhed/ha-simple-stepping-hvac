@@ -1046,11 +1046,11 @@ impl TryFrom<&ClimateConfig> for Package {
                     .unwrap();
                     let would_open_template = new_opening_ranged
                         .clone()
-                        .ne(closing_percent_value.clone())
+                        .lt(closing_percent_value.clone())
                         .to_commented_template("Want to open valve");
                     let would_close_template = new_closing_ranged
                         .clone()
-                        .ne(closing_percent_value.clone())
+                        .gt(closing_percent_value.clone())
                         .to_commented_template("Want to close valve");
                     let would_open = Condition::from_template(would_open_template.clone());
                     let would_close = Condition::from_template(would_close_template.clone());
