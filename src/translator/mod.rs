@@ -1131,8 +1131,9 @@ impl TryFrom<&ClimateConfig> for Package {
                         used_entities.into_iter().map(|x| x.to_ha_check()),
                         |x, y| x.and(y),
                     ) {
-                        conditions.push(Condition::from_template(availability_checks.clone()));
-                        triggers.push(Trigger::from_template(availability_checks));
+                        let check = availability_checks.to_commented_template("Check dependency availability");
+                        conditions.push(Condition::from_template(check.clone()));
+                        triggers.push(Trigger::from_template(check));
                     }
                     conditions.push(never_triggered.clone().or(script_run_interval));
                     if let Some(extra_conditions) = extra_run_conditions {
