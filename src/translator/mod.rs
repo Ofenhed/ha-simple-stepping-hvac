@@ -779,9 +779,9 @@ impl TryFrom<&ClimateConfig> for Package {
                             DeviceClass::Duration,
                         );
                         output.helpers.insert(entity.clone(), input);
-                        let time = add_automation_entity(entity.state())
+                        let time = &*add_automation_entity(entity.state())
                             .to_ha_call_named("radiator_update_interval")
-                            .to_float();
+                            .to_float() * TemplateExpression::literal(60);
                         let cond = Condition::from_template(
                             (&*TemplateExpression::now()
                                 - TemplateExpression::this_automation_last_trigger()).member("seconds".into())
