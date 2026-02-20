@@ -222,6 +222,7 @@ impl TemplateControl {
 
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub enum TemplateBlock {
+    Comment(Rc<str>),
     Text(Rc<str>),
     Expr(Rc<TemplateExpression>),
     Control(Rc<TemplateControl>),
@@ -259,7 +260,7 @@ impl<T: std::fmt::Debug, S: Clone, F: Fn(Option<&S>, &TemplateBlock) -> Option<(
                 state
             };
             match item {
-                TemplateBlock::Text(_) => (),
+                TemplateBlock::Text(_) | TemplateBlock::Comment(_) => (),
                 TemplateBlock::Expr(item) => {
                     for item in item.iter() {
                         self.known.push_back((parent_state.clone(), item));
@@ -306,6 +307,10 @@ impl From<Rc<TemplateExpression>> for Template {
 }
 
 impl Template {
+    fn prefix_comment(mut self, what: impl Into<Rc<str>>) -> Self {
+        self.content.insert(0, TemplateBlock::Comment(what.into()));
+        return self;
+    }
     fn print_contents(
         content: impl IntoIterator<Item = TemplateBlock>,
         f: &mut Formatter<'_, '_>,
@@ -313,6 +318,12 @@ impl Template {
         use TemplateBlock as B;
         fn print_block(block: &B, f: &mut Formatter<'_, '_>) -> std::fmt::Result {
             match block {
+                B::Comment(text) => {
+                    assert!(text.find("#}").is_none(), "Illegal control characters '#}}' in comment");
+                    f.write_str("{# ")?;
+                    f.write_str(text)?;
+                    f.write_str(" #}")
+                }
                 B::Text(text) => f.write_str(&text),
                 B::Control(expr) => expr.fmt_raw_template(f),
                 B::Optional(block) => print_block(&block, f),
@@ -404,7 +415,11 @@ impl std::fmt::Display for Template {
             }
         }
         //iterator.for_each(top_down_add);
-        let mut prefix = vec![];
+        let (mut prefix, content) = match self.content.split_first() {
+            Some((c@TemplateBlock::Comment(_), rest)) => (vec![c.clone()], rest),
+            _ => (vec![], &self.content[..]),
+        };
+
         for (expr, name, count) in setters.into_iter() {
             if count == 0 {
                 continue;
@@ -418,7 +433,7 @@ impl std::fmt::Display for Template {
                 .insert(expr, TemplateExpression::Literal(var_name).into());
         }
 
-        Self::print_contents(prefix.into_iter().chain(self.content.iter().cloned()), f)
+        Self::print_contents(prefix.into_iter().chain(content.iter().cloned()), f)
     }
 }
 
@@ -772,6 +787,10 @@ impl Rem for &TemplateExpression {
 }
 
 impl TemplateExpression {
+    pub fn to_commented_template(self: Rc<Self>, comment: impl Into<Rc<str>>) -> Template {
+        let t: Template = self.into();
+        t.prefix_comment(comment)
+    }
     fn raise_named_constexpr(
         self: &Rc<Self>,
         fun: impl Fn(Rc<TemplateExpression>, &mut Option<Rc<str>>) -> Rc<TemplateExpression>,

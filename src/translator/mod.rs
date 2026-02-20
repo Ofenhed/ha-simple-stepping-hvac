@@ -3,7 +3,7 @@ use std::{borrow::Cow, collections::HashSet, rc::Rc};
 use crate::{
     automation::{
         building_blocks::Choose, Action, Automation, Condition, Service, Stop, TimeInterval,
-        TraceOptions, Trigger, TriggerHolder,
+        TraceOptions, Trigger, TriggerHolder, HomeAssistantEvent,
     },
     config::{ClimateConfig, Room},
     entity_id::{EntityId, EntityMember, EntityType, HasEntityType as _},
@@ -247,7 +247,8 @@ impl Package {
                         .collect(),
                     attribute: None,
                     r#for: None,
-                    state: None,
+                    to: vec![],
+                    from: vec![],
                 }),
         );
         let chosen_temperature = {
@@ -349,7 +350,8 @@ impl Package {
                     entity_id: vec![derivate_entity.entity_id()],
                     attribute: None,
                     r#for: None,
-                    state: None,
+                    to: vec![],
+                    from: vec![],
                 }),
         );
         derivate_dummy_entity
@@ -607,7 +609,8 @@ impl TryFrom<&ClimateConfig> for Package {
                     ],
                     attribute: None,
                     r#for: None,
-                    state: None,
+                    to: vec![],
+                    from: vec![],
                 }),
             );
             for radiator in &room.radiators {
@@ -655,7 +658,8 @@ impl TryFrom<&ClimateConfig> for Package {
                 let after_heat_backoff_over_trigger = Trigger::State {
                     entity_id: vec![radiator_action.static_entity_id()],
                     attribute: radiator_action.static_attribute(),
-                    state: Some("idle".into()),
+                    to: vec!["idle".into()],
+                    from: vec![],
                     r#for: Some(config.backoff_after_heat.clone()),
                 };
                 let mut actions = vec![Choose {
@@ -813,15 +817,19 @@ impl TryFrom<&ClimateConfig> for Package {
                             .member("seconds".into())
                             .ge(time.clone()),
                         );
+                        let assumed_entity_name = automation_name.assumed_entity_id().unwrap().attribute("last_triggered").to_ha_call_named("assumed_id_last_triggered");
+                        let alternative_id = automation_name.entity_id().unwrap().attribute("last_triggered").to_ha_call_named("alternative_id_last_triggered");
+                        let entity_id = TemplateExpression::if_then_else(assumed_entity_name.clone().is_not_none(), assumed_entity_name, alternative_id);
+                        let time_now = TemplateExpression::now().mark_named_const_expr("time");
                         let trigger = Trigger::from_template(
+                            TemplateExpression::if_then_else(entity_id.clone().is_none(),
+                            (&*time_now.member("minute".into()) % TemplateExpression::literal(2)).eq(TemplateExpression::literal(0)),
                             (&*TemplateExpression::now()
-                                - (automation_name
-                                    .entity_id()
-                                    .unwrap()
-                                    .attribute("last_triggered")
-                                    .to_ha_call_named("last_triggered")))
+                                - entity_id)
                             .member("seconds".into())
-                            .ge(time),
+                            .ge(time)
+                            )
+                            .to_commented_template("User set timer"),
                         );
                         (cond, trigger)
                     };
@@ -845,7 +853,8 @@ impl TryFrom<&ClimateConfig> for Package {
                                             .unwrap()],
                                         attribute: None,
                                         r#for: None,
-                                        state: None,
+                                        to: vec![],
+                                        from: vec![],
                                     },
                                 },
                                 TriggerHolder {
@@ -857,7 +866,8 @@ impl TryFrom<&ClimateConfig> for Package {
                                             .unwrap()],
                                         attribute: None,
                                         r#for: None,
-                                        state: None,
+                                        to: vec![],
+                                        from: vec![],
                                     },
                                 },
                             ],
@@ -1020,8 +1030,8 @@ impl TryFrom<&ClimateConfig> for Package {
                         .into_iter(),
                     )
                     .unwrap();
-                    let would_open_template = new_opening_ranged.clone().ne(closing_percent_value.clone());
-                    let would_close_template = new_closing_ranged.clone().ne(closing_percent_value.clone());
+                    let would_open_template = new_opening_ranged.clone().ne(closing_percent_value.clone()).to_commented_template("Want to open valve");
+                    let would_close_template = new_closing_ranged.clone().ne(closing_percent_value.clone()).to_commented_template("Want to close valve");
                     let would_open = Condition::from_template(
                         would_open_template.clone(),
                     );
@@ -1092,11 +1102,19 @@ impl TryFrom<&ClimateConfig> for Package {
                     ]);
                     drop(add_automation_entity);
                     let mut conditions = vec![];
+                    let mut triggers = vec![
+                            Trigger::Homeassistant { event: HomeAssistantEvent::Start },
+                            would_open_trigger,
+                            would_close_trigger,
+                            script_run_interval_trigger,
+                            after_heat_backoff_over_trigger,
+                    ];
                     if let Some(availability_checks) = TemplateExpression::fold(
                         used_entities.into_iter().map(|x| x.to_ha_check()),
                         |x, y| x.and(y),
                     ) {
-                        conditions.push(Condition::from_template(availability_checks));
+                        conditions.push(Condition::from_template(availability_checks.clone()));
+                        triggers.push(Trigger::from_template(availability_checks));
                     }
                     conditions.push(never_triggered.clone().or(script_run_interval));
                     if let Some(extra_conditions) = extra_run_conditions {
@@ -1111,12 +1129,7 @@ impl TryFrom<&ClimateConfig> for Package {
                                 .or(config.stored_traces)
                                 .unwrap_or(15),
                         }),
-                        trigger: [
-                            would_open_trigger,
-                            would_close_trigger,
-                            script_run_interval_trigger,
-                            after_heat_backoff_over_trigger,
-                        ]
+                        trigger: triggers
                         .into_iter()
                         .map(Into::into)
                         .collect(),

@@ -42,6 +42,13 @@ impl Display for TimeInterval {
 }
 
 #[derive(Serialize, PartialEq, Eq, Clone)]
+#[serde(rename_all = "snake_case")]
+pub enum HomeAssistantEvent {
+    Start,
+    Shutdown,
+}
+
+#[derive(Serialize, PartialEq, Eq, Clone)]
 #[serde(tag = "trigger", rename_all = "snake_case")]
 pub enum Trigger {
     State {
@@ -50,8 +57,13 @@ pub enum Trigger {
         attribute: Option<Rc<str>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         r#for: Option<Duration>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        state: Option<Rc<str>>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        from: Vec<Rc<str>>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        to: Vec<Rc<str>>,
+    },
+    Homeassistant {
+        event: HomeAssistantEvent,
     },
     TimePattern {
         #[serde(
@@ -435,6 +447,12 @@ impl AutomationIdentifier {
             Self::Both { id, .. } => Some(id.as_str()),
         }
         .map(|x| EntityId::external(EntityType::Automation, x))
+    }
+    pub fn assumed_entity_id(&self) -> Option<EntityId> {
+        match self {
+            Self::Alias(name) | Self::Both { alias: name, .. } => Some(EntityId::external(EntityType::Automation, name)),
+            Self::Id(_) => None,
+        }
     }
 }
 
