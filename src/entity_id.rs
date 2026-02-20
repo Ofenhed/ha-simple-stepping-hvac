@@ -169,10 +169,6 @@ impl EntityMember {
             EntityMemberType::Attribute(_cow) => None,
         }
     }
-
-    pub fn static_state_entity(&self) -> Option<EntityId> {
-        self.state_entity()
-    }
 }
 
 impl EntityMember {

@@ -45,6 +45,7 @@ impl Display for TimeInterval {
 #[serde(rename_all = "snake_case")]
 pub enum HomeAssistantEvent {
     Start,
+    #[allow(unused)]
     Shutdown,
 }
 
