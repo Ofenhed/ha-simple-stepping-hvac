@@ -245,6 +245,9 @@ impl Package {
                         .iter()
                         .map(|x| x.entity_id())
                         .collect(),
+                    attribute: None,
+                    r#for: None,
+                    state: None,
                 }),
         );
         let chosen_temperature = {
@@ -344,6 +347,9 @@ impl Package {
                 })
                 .with_trigger(Trigger::State {
                     entity_id: vec![derivate_entity.entity_id()],
+                    attribute: None,
+                    r#for: None,
+                    state: None,
                 }),
         );
         derivate_dummy_entity
@@ -599,6 +605,9 @@ impl TryFrom<&ClimateConfig> for Package {
                         prediction_sources.first().unwrap().entity_id(),
                         prediction_sources.last().unwrap().entity_id(),
                     ],
+                    attribute: None,
+                    r#for: None,
+                    state: None,
                 }),
             );
             for radiator in &room.radiators {
@@ -639,6 +648,12 @@ impl TryFrom<&ClimateConfig> for Package {
                 };
                 let after_heat_backoff = Condition::State {
                     entity_id: radiator_action.static_entity_id(),
+                    attribute: radiator_action.static_attribute(),
+                    state: Some("idle".into()),
+                    r#for: Some(config.backoff_after_heat.clone()),
+                };
+                let after_heat_backoff_over_trigger = Trigger::State {
+                    entity_id: vec![radiator_action.static_entity_id()],
                     attribute: radiator_action.static_attribute(),
                     state: Some("idle".into()),
                     r#for: Some(config.backoff_after_heat.clone()),
@@ -796,7 +811,7 @@ impl TryFrom<&ClimateConfig> for Package {
                             (&*TemplateExpression::now()
                                 - TemplateExpression::this_automation_last_trigger())
                             .member("seconds".into())
-                            .gt(time.clone()),
+                            .ge(time.clone()),
                         );
                         let trigger = Trigger::from_template(
                             (&*TemplateExpression::now()
@@ -806,7 +821,7 @@ impl TryFrom<&ClimateConfig> for Package {
                                     .attribute("last_triggered")
                                     .to_ha_call_named("last_triggered")))
                             .member("seconds".into())
-                            .gt(time),
+                            .ge(time),
                         );
                         (cond, trigger)
                     };
@@ -828,6 +843,9 @@ impl TryFrom<&ClimateConfig> for Package {
                                         entity_id: vec![max_closing_valve_entity
                                             .state_entity()
                                             .unwrap()],
+                                        attribute: None,
+                                        r#for: None,
+                                        state: None,
                                     },
                                 },
                                 TriggerHolder {
@@ -837,6 +855,9 @@ impl TryFrom<&ClimateConfig> for Package {
                                         entity_id: vec![min_closing_valve_entity
                                             .state_entity()
                                             .unwrap()],
+                                        attribute: None,
+                                        r#for: None,
+                                        state: None,
                                     },
                                 },
                             ],
@@ -999,12 +1020,16 @@ impl TryFrom<&ClimateConfig> for Package {
                         .into_iter(),
                     )
                     .unwrap();
+                    let would_open_template = new_opening_ranged.clone().ne(closing_percent_value.clone());
+                    let would_close_template = new_closing_ranged.clone().ne(closing_percent_value.clone());
                     let would_open = Condition::from_template(
-                        new_opening_ranged.clone().ne(closing_percent_value.clone()),
+                        would_open_template.clone(),
                     );
                     let would_close = Condition::from_template(
-                        new_closing_ranged.clone().ne(closing_percent_value.clone()),
+                        would_close_template.clone(),
                     );
+                    let would_open_trigger = Trigger::from_template(would_open_template);
+                    let would_close_trigger = Trigger::from_template(would_close_template);
                     let log_previous = |expr: Rc<TemplateExpression>| {
                         Action::log(radiator.entity_id.clone(), |msg| {
                             msg.text("Calculated temperature in 1 hour is ");
@@ -1087,23 +1112,13 @@ impl TryFrom<&ClimateConfig> for Package {
                                 .unwrap_or(15),
                         }),
                         trigger: [
-                            Trigger::State {
-                                entity_id: vec![radiator.entity_id.clone().into()],
-                            },
-                            Trigger::State {
-                                entity_id: vec![temperature_entity
-                                    .static_state_entity()
-                                    .expect("Temperature entity is a state")
-                                    .into()],
-                            },
+                            would_open_trigger,
+                            would_close_trigger,
+                            script_run_interval_trigger,
+                            after_heat_backoff_over_trigger,
                         ]
                         .into_iter()
                         .map(Into::into)
-                        .chain([TriggerHolder {
-                            id: None,
-                            r#for: None,
-                            trigger: script_run_interval_trigger,
-                        }])
                         .collect(),
                         condition: conditions,
                         actions: vec![actions.into()],

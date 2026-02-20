@@ -46,6 +46,12 @@ impl Display for TimeInterval {
 pub enum Trigger {
     State {
         entity_id: Vec<EntityId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        attribute: Option<Rc<str>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        r#for: Option<Duration>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        state: Option<Rc<str>>,
     },
     TimePattern {
         #[serde(
