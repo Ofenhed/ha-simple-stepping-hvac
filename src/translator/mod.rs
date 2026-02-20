@@ -6,7 +6,7 @@ use crate::{
         TraceOptions, Trigger, TriggerHolder,
     },
     config::{ClimateConfig, Room},
-    entity_id::{EntityId, EntityMember, EntityMemberType, EntityType, HasEntityType as _},
+    entity_id::{EntityId, EntityMember, EntityType, HasEntityType as _},
     helpers::{
         DerivativeSensor,
         DeviceClass::{self, Temperature},

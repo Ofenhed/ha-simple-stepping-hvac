@@ -922,6 +922,7 @@ impl TemplateExpression {
         )
         .into()
     }
+    #[allow(unused)]
     fn call_on_self(self: Rc<Self>, fun: &'static str) -> Rc<TemplateExpression> {
         Self::fun(fun, [(None, self)])
     }

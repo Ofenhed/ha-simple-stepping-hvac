@@ -68,6 +68,7 @@ impl Package {
         self.state.iteration += 1
     }
 
+    #[allow(unused)]
     pub fn iteration(&self) -> usize {
         self.state.iteration
     }

@@ -9,34 +9,6 @@ use crate::{
     template::{Template, TemplateExpression},
     types::{ComparableNumber, HasSensors, InsertableIn},
 };
-#[derive(Serialize)]
-#[serde(untagged)]
-pub enum MaybeList<T> {
-    Single(T),
-    Multiple(Vec<T>),
-}
-
-impl<T: Clone> From<&[T]> for MaybeList<T> {
-    fn from(value: &[T]) -> Self {
-        MaybeList::Multiple(value.into())
-    }
-}
-
-impl<T> From<Vec<T>> for MaybeList<T> {
-    fn from(mut value: Vec<T>) -> Self {
-        if let [_] = &value[..] {
-            MaybeList::Single(value.pop().unwrap())
-        } else {
-            MaybeList::Multiple(value)
-        }
-    }
-}
-
-impl<T> From<T> for MaybeList<T> {
-    fn from(value: T) -> Self {
-        MaybeList::Single(value)
-    }
-}
 
 #[derive(Serialize, Deserialize, Default, Clone, Hash, PartialEq, Eq)]
 pub struct Duration {

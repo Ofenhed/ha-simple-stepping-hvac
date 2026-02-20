@@ -16,6 +16,7 @@ use crate::{
 #[derive(Default, PartialEq, Eq, Clone, Copy)]
 pub enum TimeInterval {
     At(u8),
+    #[allow(unused)]
     EveryNth(u8),
     #[allow(unused)]
     Any,
