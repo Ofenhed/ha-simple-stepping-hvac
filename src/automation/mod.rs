@@ -427,7 +427,8 @@ impl AutomationIdentifier {
             Self::Alias(_) => None,
             Self::Id(id) => Some(id.as_str()),
             Self::Both { id, .. } => Some(id.as_str()),
-        }.map(|x| EntityId::external(EntityType::Automation, x))
+        }
+        .map(|x| EntityId::external(EntityType::Automation, x))
     }
 }
 

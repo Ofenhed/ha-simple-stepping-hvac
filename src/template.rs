@@ -518,18 +518,26 @@ impl TemplateExpression {
     }
     pub fn clone_anon(self: &Rc<Self>) -> Rc<Self> {
         match &**self {
-            Self::Op(rc, op, rc1) =>
-                Self::Op(rc.clone_anon(), *op, rc1.clone_anon()).into(),
+            Self::Op(rc, op, rc1) => Self::Op(rc.clone_anon(), *op, rc1.clone_anon()).into(),
             Self::Pipe(rc, rc1) => Self::Pipe(rc.clone_anon(), rc1.clone_anon()).into(),
-            Self::Member(rc, name) =>
-              Self::Member(rc.clone_anon(), name.to_owned()).into(),
+            Self::Member(rc, name) => Self::Member(rc.clone_anon(), name.to_owned()).into(),
             Self::Unary(op, rc) => Self::Unary(*op, rc.clone_anon()).into(),
-            Self::ConstExpr(rc)
-            | Self::NamedConstExpr(_, rc) => Self::ConstExpr(rc.clone_anon()).into(),
-            Self::Call(f, rc) =>
-                Self::Call(f, rc.iter().map(|(name, expr)| (name.to_owned(), expr.clone_anon())).collect()).into(),
-            Self::IfThenElse { r#if, then, r#else } =>
-                Self::IfThenElse { r#if: r#if.clone_anon(), then: then.clone_anon(), r#else: r#else.clone_anon() }.into(),
+            Self::ConstExpr(rc) | Self::NamedConstExpr(_, rc) => {
+                Self::ConstExpr(rc.clone_anon()).into()
+            }
+            Self::Call(f, rc) => Self::Call(
+                f,
+                rc.iter()
+                    .map(|(name, expr)| (name.to_owned(), expr.clone_anon()))
+                    .collect(),
+            )
+            .into(),
+            Self::IfThenElse { r#if, then, r#else } => Self::IfThenElse {
+                r#if: r#if.clone_anon(),
+                then: then.clone_anon(),
+                r#else: r#else.clone_anon(),
+            }
+            .into(),
             Self::Literal(_) | Self::String(_) => self.clone(),
         }
     }
