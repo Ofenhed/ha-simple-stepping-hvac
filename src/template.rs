@@ -319,7 +319,10 @@ impl Template {
         fn print_block(block: &B, f: &mut Formatter<'_, '_>) -> std::fmt::Result {
             match block {
                 B::Comment(text) => {
-                    assert!(text.find("#}").is_none(), "Illegal control characters '#}}' in comment");
+                    assert!(
+                        text.find("#}").is_none(),
+                        "Illegal control characters '#}}' in comment"
+                    );
                     f.write_str("{# ")?;
                     f.write_str(text)?;
                     f.write_str(" #}")
@@ -416,7 +419,7 @@ impl std::fmt::Display for Template {
         }
         //iterator.for_each(top_down_add);
         let (mut prefix, content) = match self.content.split_first() {
-            Some((c@TemplateBlock::Comment(_), rest)) => (vec![c.clone()], rest),
+            Some((c @ TemplateBlock::Comment(_), rest)) => (vec![c.clone()], rest),
             _ => (vec![], &self.content[..]),
         };
 

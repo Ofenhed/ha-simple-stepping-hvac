@@ -451,7 +451,9 @@ impl AutomationIdentifier {
     }
     pub fn assumed_entity_id(&self) -> Option<EntityId> {
         match self {
-            Self::Alias(name) | Self::Both { alias: name, .. } => Some(EntityId::external(EntityType::Automation, name)),
+            Self::Alias(name) | Self::Both { alias: name, .. } => {
+                Some(EntityId::external(EntityType::Automation, name))
+            }
             Self::Id(_) => None,
         }
     }
