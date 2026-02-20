@@ -1047,13 +1047,10 @@ impl TryFrom<&ClimateConfig> for Package {
                     ) {
                         conditions.push(Condition::from_template(availability_checks));
                     }
-                    conditions.push(never_triggered.clone().or(
-                        if let Some(extra_conditions) = extra_run_conditions {
-                            script_run_interval.and(extra_conditions)
-                        } else {
-                            script_run_interval
-                        },
-                    ));
+                    conditions.push(never_triggered.clone().or(script_run_interval));
+                    if let Some(extra_conditions) = extra_run_conditions {
+                        conditions.push(extra_conditions)
+                    };
                     let automation = Automation {
                         name: automation_name,
                         trace: Some(TraceOptions {
